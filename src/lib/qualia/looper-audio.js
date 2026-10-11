@@ -37,6 +37,7 @@ import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
 import { makeSoftLimiter, setSoftLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
 import { autoCorrelate } from './pitch.js';
+import { planLock, lockErrorSec, retroOutCycle } from './looper-lock.js';
 import { registerContext, resumeContext } from './audio-unlock.js';
 
 // Reused analysis window for the input-pitch reader (allocation-free hot path).
@@ -67,6 +68,15 @@ const START_MARGIN = 0.08;
 // Headroom baked on each side of the loop region so the "nudge (ms)" offset can
 // slide the playback window live without re-recording. Bounds the offset range.
 const PAD_SEC = 0.5;
+// Lock watchdog: while synced, every LOCK_POLL_MS each playing voice is checked
+// against Strudel's cycle clock and re-locked once it's been more than
+// LOCK_TOL_SEC off for LOCK_STRIKES reads in a row (a Strudel stop/start, a
+// tempo change, a playback-sync jump, a voice started while Strudel was
+// stopped). Two strikes so one jittery clock read can't cause a re-lock.
+const LOCK_POLL_MS = 250;
+const LOCK_TOL_SEC = 0.03;
+const LOCK_STRIKES = 2;
+const LOCK_CPS_TOL = 0.01;   // relative tempo change that forces a re-lock (fit rate)
 
 export function createLooperAudio({ audio, syncStrudel } = {}) {
   let ctx = null;
@@ -1015,6 +1025,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         const buffer = ctx.createBuffer(nch, regionLen, sr);
         for (let c = 0; c < nch; c++) buffer.copyToChannel(all[c].subarray(sliceFrom, sliceTo), c);
         const loopStartBase = padStart;   // sample idx of the musical IN within `buffer`
+        const anchorCycle = (snapIn && cycleOut != null) ? snapIn.cycleIn : null;
 
         snapIn = null;
         _transient = null; transientFrame = null;
@@ -1023,6 +1034,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
           loopStartBase, regionFrames,
           naturalSeconds: regionFrames / sr,
           recordedCycles,
+          anchorCycle,      // Strudel cycle of the IN downbeat (phrase lock); null = free take
           contentFrames: trailingContentFrames(buffer, loopStartBase, regionFrames, sr),
         });
       };
@@ -1063,24 +1075,39 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
     // Anchor the Strudel grid to a looper-ctx reference time read right now.
     const tRef = ctx.currentTime;
-    let info = null;
-    if (syncOn) {
-      const i = syncStrudel?.getStrudelCyclePos?.();
-      if (i && i.cps > 0 && typeof i.pos === 'number') info = i;
-    }
+    const info = syncOn ? readClock() : null;
     const effCps = info ? info.cps : (cps > 0 ? cps : 0.5);
 
-    // Clamp to what the ring can hold (leave PAD headroom on both ends).
-    const maxByRing = Math.max(N, Math.floor(((RING_SECONDS - 2 * PAD_SEC - 0.2) * effCps) / N) * N);
+    // OUT boundary: the NEAREST grid boundary, same rule as stop-record. When
+    // that's still ahead (grab pressed just before the downbeat) we wait for
+    // it rather than dropping back a whole grid unit — the old fallback threw
+    // away the phrase you'd just played and grabbed the one before it.
+    // Free mode ends "now".
+    let endCycle = null, outAbs = tRef;
+    if (info) {
+      endCycle = retroOutCycle(info.pos, N);
+      outAbs = tRef + (endCycle - info.pos) / info.cps;
+    }
+    // Then also wait out PAD_SEC past OUT, like stop-record does, so the take
+    // has post-roll for the nudge. Without it a grab couldn't slide later
+    // (the usual latency-compensating direction), so grabs sat early against
+    // recorded takes by the whole nudge.
+    const waitSec = Math.max(0, outAbs + PAD_SEC + 0.03 - ctx.currentTime);
+
+    // Clamp to what the ring can hold (PAD headroom both ends + the wait).
+    const maxByRing = Math.max(N, Math.floor(((RING_SECONDS - 2 * PAD_SEC - 0.3 - waitSec) * effCps) / N) * N);
     if (L > maxByRing) L = maxByRing;
 
-    const secondsWanted = L / effCps + 2 * PAD_SEC + 0.3;
+    if (waitSec > 0) await new Promise((r) => setTimeout(r, waitSec * 1000));
+    if (!recNode || !srcNode) return null;           // capture closed while waiting
+
+    const secondsWanted = (ctx.currentTime - outAbs) + L / effCps + PAD_SEC + 0.3;
     const id = `g${(_grabSeq++).toString(36)}`;
     const resp = await new Promise((resolve) => {
       _pendingGrabs.set(id, resolve);
       try { recNode.port.postMessage({ cmd: 'grab', seconds: secondsWanted, id }); }
       catch { _pendingGrabs.delete(id); resolve(null); }
-      setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 600);
+      setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 2000);
     });
     if (!resp || !resp.chans || !resp.chans.length || !resp.frames) return null;
 
@@ -1088,23 +1115,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const total = resp.frames;
     const fpc = sr / effCps;                          // frames per cycle
 
-    // OUT boundary. Snap to the NEAREST grid boundary; if that boundary is
-    // still in the future, fall back to the last one that passed. Then clamp to
-    // the captured end — the boundary may sit a few ms past the worklet's last
-    // block (it can't grab audio not yet captured); the residual offset is what
-    // the global "nudge ms" compensates, same as a normal recording.
-    let outAbs;
-    if (info) {
-      let endCycle = Math.round(info.pos / N) * N;
-      outAbs = tRef + (endCycle - info.pos) / info.cps;
-      if (outAbs > tRef + EPS) {
-        endCycle = Math.floor(info.pos / N) * N;
-        outAbs = tRef + (endCycle - info.pos) / info.cps;
-      }
-      if (outAbs > resp.tEnd) outAbs = resp.tEnd;
-    } else {
-      outAbs = resp.tEnd;                             // free mode: end "now"
-    }
+    // Clamp OUT to the captured end (it can't grab audio not yet captured).
+    if (outAbs > resp.tEnd) outAbs = resp.tEnd;
     let outFrame = Math.round((outAbs - resp.tStart) * sr);
     outFrame = Math.max(0, Math.min(total, outFrame));
 
@@ -1136,6 +1148,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       regionFrames,
       naturalSeconds: regionFrames / sr,
       recordedCycles: effL,
+      // Strudel cycle the loop head was played on — the phrase anchor that
+      // keeps it on the same bar across stop/starts (null = free grab).
+      anchorCycle: endCycle != null ? endCycle - effL : null,
       contentFrames: trailingContentFrames(buffer, padStart, regionFrames, sr),
     };
   }
@@ -1235,32 +1250,25 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return { startFrame, endFrame: startFrame + track.regionFrames };
   }
 
-  // Absolute rawContext time of the next grid boundary (≡ 0 mod N), or a
-  // tiny lookahead when unsynced / Strudel isn't reporting a position.
-  function nextBoundaryAbs(grid, syncOn) {
-    const now = ctx.currentTime;
-    if (syncOn) {
-      const info = syncStrudel?.getStrudelCyclePos?.();
-      if (info && info.cps > 0 && typeof info.pos === 'number') {
-        const N = grid > 0 ? grid : 1;
-        const k = Math.ceil((info.pos + START_MARGIN * info.cps) / N - EPS);
-        return now + (k * N - info.pos) / info.cps;
-      }
-    }
-    return now + START_MARGIN;
+  // Strudel's audible cycle clock { pos, cps }, or null when it isn't playing /
+  // readable (the loop then free-runs until the watchdog can lock it).
+  function readClock() {
+    const info = syncStrudel?.getStrudelCyclePos?.();
+    return (info && info.cps > 0 && typeof info.pos === 'number' && isFinite(info.pos)) ? info : null;
   }
 
-  // Loop phase 0..1 at `now + ahead`, locked so Strudel cycle ≡ 0 (mod length)
-  // is phase 0. Used by "start now" to drop in mid-cycle. 0 when unsynced / no
-  // Strudel position (so immediate start just begins at the loop head).
-  function currentPhase(length, syncOn, ahead = 0) {
-    if (!syncOn) return 0;
-    const info = syncStrudel?.getStrudelCyclePos?.();
-    if (!info || !(info.cps > 0) || typeof info.pos !== 'number') return 0;
-    const L = length > 0 ? length : 1;
-    let ph = ((info.pos + ahead * info.cps) % L) / L;
-    if (ph < 0) ph += 1;
-    return ph;
+  // Where (absolute looper-ctx time) and at what loop phase a voice starts.
+  // Synced: phrase-locked to Strudel via the take's anchor cycle (see
+  // looper-lock.js) — on the next grid boundary, or right now with "start
+  // now". Unsynced / Strudel stopped: a tiny lookahead at the loop head.
+  function lockPlan({ grid, syncOn, immediate, anchor, loopDurSec }) {
+    const now = ctx.currentTime;
+    const info = syncOn ? readClock() : null;
+    if (!info) return { when: now + START_MARGIN, phase: 0, cps: null };
+    const { aheadSec, phase } = planLock({
+      pos: info.pos, cps: info.cps, anchor, loopDurSec, grid, immediate, margin: START_MARGIN,
+    });
+    return { when: now + aheadSec, phase, cps: info.cps };
   }
 
   // The persistent output channel for a track (gain → loopMaster), created on
@@ -1382,7 +1390,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     //   tile → natural rate, loop the region trimmed of trailing silence (gapless)
     const mode = track.fitMode || 'once';
     const isFit = mode === 'fit';
-    const rate = isFit ? derivePlaybackRate(track, cps) : 1;
+    // Synced, the live Strudel tempo wins over the caller's cached cps, so a
+    // fit take is sized to the tempo it's about to lock against.
+    const clk = syncOn ? readClock() : null;
+    const rate = isFit ? derivePlaybackRate(track, clk ? clk.cps : cps) : 1;
     const loopFrames = (mode === 'tile')
       ? Math.max(1, Math.min(track.regionFrames, track.contentFrames || track.regionFrames))
       : track.regionFrames;
@@ -1390,12 +1401,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const regionSec = loopFrames / sr;
     const playLoopDur = regionSec / rate;   // output seconds per loop
 
-    // When + phase to start at: the next grid boundary at the loop head
-    // (default), or — with "start now" — immediately at the current Strudel
-    // phase within the loop. Computed fresh per call (after any async load).
-    const plan = () => immediate
-      ? { when: ctx.currentTime + START_MARGIN, phase: currentPhase(track.length, syncOn, START_MARGIN) }
-      : { when: nextBoundaryAbs(grid, syncOn), phase: 0 };
+    // When + phase to start at: the next grid boundary (default) or right now
+    // ("start now"), at the phase that puts the take back on the bar of the
+    // phrase it was captured on. Computed fresh per call (after any async load).
+    const anchor = Number.isFinite(track.anchorCycle) ? track.anchorCycle : 0;
+    const plan = () => lockPlan({ grid, syncOn, immediate, anchor, loopDurSec: playLoopDur });
+    // What the lock watchdog needs to check + re-lock this voice later.
+    const lockInfo = (when, lockCps) => ({ track, grid, syncOn, anchor, when, lockCps, strikes: 0 });
 
     // Pitch-preserving path: feed the nudge-adjusted region (all channels) into
     // the stretch node and loop it at `rate` with no pitch shift. Only in `fit`
@@ -1417,9 +1429,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         try {
           node.dropBuffers();
           await node.addBuffers(regions);
-          const { when, phase } = plan();   // re-read after the async load for a tight lock
+          const { when, phase, cps: lockCps } = plan();   // re-read after the async load for a tight lock
           node.schedule({ output: when, active: true, input: phase * regionSec, rate, semitones: 0, loopStart: 0, loopEnd: regionSec });
-          voices.set(track.id, { kind: 'stretch', playStartAbs: when - phase * playLoopDur, playLoopDur });
+          voices.set(track.id, { kind: 'stretch', playStartAbs: when - phase * playLoopDur, playLoopDur, ...lockInfo(when, lockCps) });
+          ensureLockWatch();
           ensureAdopted();
           return true;
         } catch (err) {
@@ -1438,7 +1451,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // tracks persist pristine. A re-lock (stop→play) re-bakes at the new
     // nudge-shifted position.
     const seam = bakeSeam(track.buffer, startFrame, loopFrames, sr);
-    const { when, phase } = plan();
+    const { when, phase, cps: lockCps } = plan();
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
     source.loop = true;
@@ -1447,9 +1460,56 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.playbackRate.value = rate;
     source.connect(c.gain);
     source.start(when, (startFrame + phase * loopFrames) / sr);
-    voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur, seam, buffer: track.buffer });
+    voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur, seam, buffer: track.buffer, ...lockInfo(when, lockCps) });
     ensureAdopted();
+    ensureLockWatch();
     return true;
+  }
+
+  // ── lock watchdog ──
+  // Loops are free-running BufferSources once started, so anything that moves
+  // Strudel's clock afterwards (■/▶ on Strudel resets its cycle count to 0, a
+  // setcps, a playback-sync jump) used to leave them wherever they were. This
+  // compares each synced voice against the clock a few times a second and
+  // re-locks it (dropped in at the right phase, not waiting for a boundary)
+  // when it's drifted off. With Strudel stopped, loops simply keep free-running
+  // and snap back in as soon as it plays again.
+  let _lockTimer = null;
+  function ensureLockWatch() {
+    if (_lockTimer || !voices.size) return;
+    _lockTimer = setInterval(checkLock, LOCK_POLL_MS);
+  }
+  function stopLockWatch() {
+    if (_lockTimer) { clearInterval(_lockTimer); _lockTimer = null; }
+  }
+  function checkLock() {
+    if (!voices.size || !ctx) { stopLockWatch(); return; }
+    // Right after a Strudel (re)start its scheduler can still expose the
+    // previous run's anchor — wait until it's fresh, like the sequencer does.
+    if (syncStrudel?.isStrudelSchedulerFresh && !syncStrudel.isStrudelSchedulerFresh()) return;
+    const info = readClock();
+    if (!info) return;
+    const now = ctx.currentTime;
+    for (const v of voices.values()) {
+      if (!v.syncOn || !v.track || v.relocking || now < v.when + 0.05) continue;
+      let off;
+      if (!(v.lockCps > 0) || Math.abs(info.cps / v.lockCps - 1) > LOCK_CPS_TOL) off = true;
+      else {
+        const err = lockErrorSec({
+          pos: info.pos, cps: info.cps, anchor: v.anchor,
+          loopDurSec: v.playLoopDur, sinceStartSec: now - v.playStartAbs,
+        });
+        off = Math.abs(err) > LOCK_TOL_SEC;
+      }
+      v.strikes = off ? v.strikes + 1 : 0;
+      if (v.strikes >= LOCK_STRIKES) relock(v);
+    }
+  }
+  function relock(v) {
+    v.relocking = true;
+    console.debug('[qualia] looper re-lock', v.track.id);
+    playVoice(v.track, { grid: v.grid, syncOn: true, cps: readClock()?.cps || 0.5, immediate: true })
+      .catch((e) => { console.warn('[qualia] looper re-lock failed:', e); v.relocking = false; });
   }
 
   function stopVoice(id) {
@@ -1491,6 +1551,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Drop the adopted 'looper' analyser once nothing is looping, so the source
   // disappears from the visualizer + recordable mix when silent.
   function maybeRelease() {
+    if (voices.size === 0) stopLockWatch();
     if (voices.size === 0 && _adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
   }
 
@@ -1564,6 +1625,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     _freezeBus = _freezeLimiter = null;
     for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
     _pendingGrabs.clear();
+    stopLockWatch();
     removeAll();
     teardownCapture();
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
@@ -1688,6 +1750,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     isCapturing: () => !!srcNode,
     isRecording: () => recording,
     isVoicePlaying: (id) => voices.has(id),
+    // Sync toggled while loops play: synced voices are watched + re-locked to
+    // Strudel; unsynced ones are left free-running where they are.
+    setVoicesSynced: (on) => { for (const v of voices.values()) { v.syncOn = !!on; v.strikes = 0; } if (on) ensureLockWatch(); },
     anyPlaying: () => voices.size > 0,
     dispose,
   };

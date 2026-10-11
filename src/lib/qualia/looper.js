@@ -513,6 +513,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       order: _orderSeq++,                           // stable display/persist order
       buffer: null, sampleRate: 0, loopStartBase: 0, regionFrames: 0,
       naturalSeconds: 0, recordedCycles: null,
+      anchorCycle: null,                            // Strudel cycle the take's head was played on (phrase lock)
       contentFrames: 0,                             // region minus trailing silence (for "tile")
       grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
       length: null,                                 // cycles the take occupies
@@ -574,7 +575,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       pcm,
       sampleRate: t.sampleRate, regionFrames: t.regionFrames, contentFrames: t.contentFrames,
       loopStartBase: t.loopStartBase, naturalSeconds: t.naturalSeconds,
-      recordedCycles: t.recordedCycles,
+      recordedCycles: t.recordedCycles, anchorCycle: t.anchorCycle ?? null,
       grid: t.grid, length: t.length, fitMode: t.fitMode, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
     };
   }
@@ -625,6 +626,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
         contentFrames: r.contentFrames || r.regionFrames || buffer.length,
         naturalSeconds: r.naturalSeconds || (buffer.length / sr),
         recordedCycles: r.recordedCycles ?? null,
+        anchorCycle: Number.isFinite(r.anchorCycle) ? r.anchorCycle : null,
         grid: Math.max(1, Math.min(16, r.grid || model.gridDefault)),
         length: r.length || r.recordedCycles || model.gridDefault,
         // Migrate pre-fitMode loops: a take deliberately stretched (length ≠ its
@@ -761,6 +763,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     t.contentFrames = res.contentFrames || res.regionFrames;
     t.naturalSeconds = res.naturalSeconds;
     t.recordedCycles = cyc;
+    t.anchorCycle = Number.isFinite(res.anchorCycle) ? res.anchorCycle : null;
     t.length = cyc;
     renderers.get(t.id)?.invalidate();
     refreshTrackRow(t);
@@ -775,18 +778,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // ⟲ retro — grab the last N cycles from the always-on live buffer into the
   // armed track, phase-locked to the grid. The buffer must be running (capture
   // open) and the AudioWorklet available (the ring lives in the processor).
+  let _grabbing = false;
   async function doRetroGrab() {
-    if (recording) return;
+    if (recording || _grabbing) return;   // a grab may wait for its downbeat — don't stack them
     if (!looperAudio.isRetroCapable()) { setStatus('retro needs AudioWorklet'); return; }
     if (!looperAudio.isCapturing()) { setStatus('turn the buffer on first'); return; }
     // Grab off the armed take's grid (or the default if nothing's armed yet).
     const armed = armedTrack();
     const grid = armed ? armed.grid : model.gridDefault;
-    setStatus('grabbing…');
+    // Synced but Strudel stopped: there's no grid to cut on, so the grab is
+    // free-length at the panel cps — say so rather than silently guessing.
+    setStatus(syncOn() && !strudelLive() ? `grabbing (strudel stopped — free @ ${model.cps} cps)…` : 'grabbing…');
     let res = null;
+    _grabbing = true;
     try {
       res = await looperAudio.grabRetro({ grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
     } catch (e) { console.warn('[qualia] retro grab failed:', e); }
+    finally { _grabbing = false; }
     if (!res) { setStatus('buffer too short — play a few more bars'); refreshTransport(); return; }
     // Grab is additive: land it in a FRESH track so it layers instead of
     // overwriting. Reuse the armed track only when it's still blank, so we don't
@@ -1236,6 +1244,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (typeof cfg.sync === 'boolean') {
       model.syncStrudel = cfg.sync;
       lsSet(SYNC_KEY, model.syncStrudel ? '1' : '0');
+      looperAudio.setVoicesSynced?.(model.syncStrudel);
     }
     if (typeof cfg.immediate === 'boolean') {
       model.immediate = cfg.immediate;
@@ -1423,6 +1432,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncCb.addEventListener('change', () => {
       model.syncStrudel = !!syncCb.checked;
       lsSet(SYNC_KEY, model.syncStrudel ? '1' : '0');
+      looperAudio.setVoicesSynced?.(model.syncStrudel);
       refreshSyncStatus();
       refreshSyncBtnVisibility();
     });
@@ -3344,7 +3354,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
           channels,
           meta: {
             order: r.order, regionFrames: r.regionFrames, contentFrames: r.contentFrames, loopStartBase: r.loopStartBase,
-            naturalSeconds: r.naturalSeconds, recordedCycles: r.recordedCycles,
+            naturalSeconds: r.naturalSeconds, recordedCycles: r.recordedCycles, anchorCycle: r.anchorCycle ?? null,
             grid: r.grid, length: r.length, fitMode: r.fitMode, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
           },
         });
@@ -3389,7 +3399,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
             id: l.id, order: m.order,
             pcm: l.channels, sampleRate: l.sampleRate || 48000,
             regionFrames: m.regionFrames, contentFrames: m.contentFrames, loopStartBase: m.loopStartBase,
-            naturalSeconds: m.naturalSeconds, recordedCycles: m.recordedCycles,
+            naturalSeconds: m.naturalSeconds, recordedCycles: m.recordedCycles, anchorCycle: m.anchorCycle ?? null,
             grid: m.grid, length: m.length, fitMode: m.fitMode, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
           });
         }
