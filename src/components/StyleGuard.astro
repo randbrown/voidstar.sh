@@ -83,8 +83,12 @@
           }));
         }
         if (window.caches && caches.keys) {
+          // Only the versioned app-shell caches (voidstar-v<N>) — the runtime
+          // caches (samples, Strudel bundle, models) aren't what's broken, and
+          // re-downloading them would cost a performer their offline sounds.
           work.push(caches.keys().then(function (ks) {
-            return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+            return Promise.all(ks.filter(function (k) { return k.indexOf('voidstar-v') === 0; })
+              .map(function (k) { return caches.delete(k); }));
           }));
         }
       } catch (e) { /* still reload below */ }

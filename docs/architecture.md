@@ -92,6 +92,10 @@ instead of failing). Three pieces keep that true; don't regress them:
 - `StyleGuard` probes that the origin actually answers before wiping SW caches to self-heal.
   Otherwise a lie-fi page that loads slowly would delete the only copy that can run offline.
 
+- Cross-origin runtime caching (Strudel bundle, samples, soundfonts, models, fonts) lives in
+  unversioned `voidstar-cdn-1` / `voidstar-media-1` caches that SW version bumps keep. StyleGuard
+  only clears the versioned `voidstar-v<N>` shell caches. See `docs/livecoding.md` → Offline use.
+
 The app data layers (setlist, mind) are already local-first: IndexedDB is the source of truth,
 edits set a dirty flag, and Drive sync runs off the boot path and catches up when the network
 returns. Keep Drive/GIS/Spotify work off the first render.
