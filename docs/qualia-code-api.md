@@ -394,11 +394,12 @@ qualia.quantize("cycle")           // scene changes land on the Strudel downbeat
 ```js
 qualia.overlay("skeleton", true)   // skeleton | sparks | aura | ripples | crawler
 qualia.sparkStyle("emmons")        // dots | emmons | shobud
-qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|pointer|pose|logo|wander,
+qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|pointer|pose|code|logo|wander,
                                    // count 1..4|'pose' (one per person), legs 4..8, size, speed, stride,
                                    // anchor, boxes, boxSize, reblit, body frame|lens|void, silk (web
                                    // line shot on the bass beat toward where it's heading), reactivity,
                                    // quantize highs|mids|beat|off (feet step on hats / snare / kick),
+                                   // code (grip the Strudel editor's words while it's unfocused),
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip
 qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch / qualia.voxel

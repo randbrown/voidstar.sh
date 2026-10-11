@@ -167,6 +167,20 @@ frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. To
 topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,
 `qualia.overlay('crawler', on)` / `qualia.crawler({…})` from code.
 
+*Code footholds* (`code`, on by default): while the Strudel editor is open and **not focused**, the
+page (`crawler-code.js`) scans the words CodeMirror is showing — a Range rect per word over the
+visible `.cm-line`s, every 200 ms, ≤512 words, nothing written to CodeMirror's DOM — and the sim
+grips them like the logo rect: a foot landing within half a reach of a word stands on its midline,
+boxes exactly that word, and the reblit pass re-prints the word's text (zoomed / tilted / skewed /
+knocked out). `follow: 'code'` (and the auto fallback after pointer + pose) reads along the code,
+mostly a few words forward, sometimes a jump. The editor panel (z18) is above the pose canvas, so
+the part of a creature inside the Strudel panel's rect (header included) is drawn on `#qualia-crawler-top` (pointer-events
+none, after the panels in DOM order, its z-index matched to the panel's: 18, or 19 once
+click-to-front raises it) and the pose canvas draws the rest under complementary clips. While
+anything in the Strudel panel has focus (typing, or a header control) the holds drop and the top
+canvas hides at once: the creature is back under the code until you click off the panel. Only the pose-canvas half is recorded (the editor text isn't either), and the top
+canvas doesn't ride the cam walk (the editor doesn't).
+
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
 fx canvas + transition freeze-frame + overlay — never the camera panel or UI): random pan (up to
 ±60% of the stage), exponential zoom (up to 20×), and unbounded rotation (a spin velocity, so the
