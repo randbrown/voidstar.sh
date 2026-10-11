@@ -43,13 +43,16 @@ export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
   function editorParts() {
     const mount = getMount?.();
     if (!mount || !isOpen()) return null;
-    const ed = mount.querySelector('strudel-editor');
-    if (!ed) return null;
-    const root = ed.shadowRoot || ed;
-    const scroller = root.querySelector('.cm-scroller');
-    const content = root.querySelector('.cm-content');
+    // @strudel/repl mounts CodeMirror as a SIBLING of <strudel-editor> in the
+    // mount (light DOM), not inside it; fall back to a shadow root in case a
+    // later bundle moves it there.
+    let cm = mount.querySelector('.cm-editor');
+    if (!cm) cm = mount.querySelector('strudel-editor')?.shadowRoot?.querySelector('.cm-editor');
+    if (!cm) return null;
+    const scroller = cm.querySelector('.cm-scroller');
+    const content = cm.querySelector('.cm-content');
     if (!scroller || !content) return null;
-    return { mount, ed, root, scroller, content };
+    return { mount, scroller, content };
   }
 
   /** True while the caret is in the editor (typing). Buttons in the panel
