@@ -18,8 +18,8 @@
 //              Hydra is running. Live-code the other side of the portal.
 //   clean    — the plain feed, lightly graded
 // `sample` picks the mapping: 'frame' squeezes a centred window of the
-// displayed frame into the pane (the reel look) — `crop` sets its width as a
-// fraction of the screen, aspect-matched to the pane so nothing stretches;
+// displayed frame into the pane (the reel look) — `crop` sets its size as a
+// fraction of the screen (1 = the whole screen, the default);
 // 'lens' makes the pane a see-through window onto what's behind it, `zoom`
 // magnifying (>1) or widening (<1) the view about the pane centre. `background` is the rest of the screen: the dimmed live
 // feed, or void (near-black → effectively transparent over Hydra).
@@ -427,10 +427,10 @@ export default {
     // finger length. 'auto' flips on hand orientation (opposed V's =
     // corners). Corner grip needs the 21-pt hand model (armed while this
     // quale is active); without it the pane stays in edge grip.
-    // Frame sample: width of the centred screen window squeezed into the
+    // Frame sample: size of the centred screen window squeezed into the
     // pane (1 = the whole screen, hands and all). Lens sample: magnification.
-    { id: 'crop',       label: 'crop',       type: 'range', min: 0.15, max: 1, step: 0.05, default: 0.4 },
-    { id: 'zoom',       label: 'zoom',       type: 'range', min: 0.5, max: 2, step: 0.05, default: 0.85 },
+    { id: 'crop',       label: 'crop',       type: 'range', min: 0.15, max: 1, step: 0.05, default: 1 },
+    { id: 'zoom',       label: 'zoom',       type: 'range', min: 0.5, max: 2, step: 0.05, default: 1 },
     { id: 'grip',       label: 'grip',       type: 'select', options: ['auto', 'edges', 'corners'], default: 'auto' },
     // 'rect': a true rectangle with a steadied, level-snapped angle.
     // 'free': the raw bilinear quad (bowties, skews, folds).
@@ -466,7 +466,7 @@ export default {
   },
 
   presets: {
-    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     crop: 0.4, zoom: 0.85, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
+    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     crop: 1, zoom: 1, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
     blueprint: { look: 'edges',    sample: 'frame', background: 'void',   palette: 'voidglow', dots: 6,  glow: 1.0,  flicker: 0.20 },
     terminal:  { look: 'ascii',    sample: 'frame', background: 'void',   palette: 'phosphor', dots: 9,  glow: 0.6,  flicker: 0.45 },
     heatpane:  { look: 'thermal',  sample: 'lens',  background: 'camera', palette: 'gold',     dots: 7,  glow: 0.7,  flicker: 0.25 },
@@ -512,7 +512,7 @@ export default {
 
     const scratch = {
       look: 0, sample: 0, background: 0,
-      dots: 7, glow: 0.8, flicker: 0.35, zoom: 0.85,
+      dots: 7, glow: 0.8, flicker: 0.35, zoom: 1,
       paper: PALETTES.riso.paper, inkA: PALETTES.riso.inkA,
       inkB: PALETTES.riso.inkB, edge: PALETTES.riso.edge,
       portalAlpha: 0, spanW: 100, spanH: 40, time: 0, bass: 0,
@@ -950,15 +950,13 @@ export default {
       scratch.spanW = Math.max(8, (eTop + eBot) * 0.5);
       scratch.spanH = Math.max(8, (eL + eR) * 0.5);
 
-      // Frame-sample source window: `crop` of the screen width, centred,
-      // shaped like the pane (so the content isn't stretched), shrunk to fit
-      // if a tall pane would need more than the screen height.
-      let fw = W * (params.crop ?? 0.4);
-      let fh = fw * scratch.spanH / scratch.spanW;
-      if (fh > H) { fw *= H / fh; fh = H; }
+      // Frame-sample source window: `crop` of the screen, centred (1 = the
+      // whole screen squeezed into the pane, the original reel look).
+      const crop = params.crop ?? 1;
+      const fw = W * crop, fh = H * crop;
       scratch.winX = (W - fw) / 2; scratch.winY = (H - fh) / 2;
       scratch.winW = fw; scratch.winH = fh;
-      scratch.zoom = params.zoom ?? 0.85;
+      scratch.zoom = params.zoom ?? 1;
     }
 
     // Canvas-px (y-down) → video-uv (y-down) affine, honoring the preview's
