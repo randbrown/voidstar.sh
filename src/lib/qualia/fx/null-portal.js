@@ -81,6 +81,12 @@ const LEAN_DEAD = 0.10, LEAN_MAX = 1.0, LEAN_KEYSTONE = 0.45;
 // when the hand worker is busy with crops) — fall back to
 // the pose-model fingertips rather than pinning corners to a dead frame.
 const HANDS_FRESH_MS = 450;
+// Weak-tracking calm-down. A side that drops out keeps its last corners for
+// HOLD_S before easing toward the idle autopilot (so detector blinks don't
+// yank the pane), and pose-model fingertips (the rough fallback tier) need
+// POSE_VIS confidence to drive at all.
+const HOLD_S = 0.6;
+const POSE_VIS = 0.5;
 
 // Glyph ramp for the ascii look, light → dense. Baked to a one-row atlas.
 const GLYPHS = ' .:-~=+*#%@';
@@ -508,6 +514,13 @@ export default {
     // Smoothed per-side tracking presence (0..1): L drives TL/BL, R TR/BR.
     let presL = 0, presR = 0;
     let leanS = 0;   // smoothed pane tilt (rad, + = top edge away)
+    // Weak-tracking state: seconds since each side was last seen, its last
+    // tracked corners (screen px), the last corner-frame target, and the
+    // smoothed tracking quality (0 autopilot … 1 hand model).
+    let lostL = 1e9, lostR = 1e9, heldOkL = false, heldOkR = false;
+    const heldL = new Float32Array(4), heldR = new Float32Array(4);
+    const lastFrame = new Float32Array(8), idle = new Float32Array(8);
+    let frameAge = 1e9, qual = 0;
     const camMat = new Float32Array(9);
 
     const scratch = {
@@ -780,13 +793,13 @@ export default {
       if (raw && raw.length >= 33) {
         const li = raw[LM_L_INDEX], lt = raw[LM_L_THUMB];
         const ri = raw[LM_R_INDEX], rt = raw[LM_R_THUMB];
-        if (li && (li.visibility ?? 0) > 0.25) {
+        if (li && (li.visibility ?? 0) > POSE_VIS) {
           gotL = true;
           liX = li.x; liY = li.y;
           const tOk = lt && (lt.visibility ?? 0) > 0.2;
           ltX = tOk ? lt.x : li.x; ltY = tOk ? lt.y : li.y + 0.08;
         }
-        if (ri && (ri.visibility ?? 0) > 0.25) {
+        if (ri && (ri.visibility ?? 0) > POSE_VIS) {
           gotR = true;
           riX = ri.x; riY = ri.y;
           const tOk = rt && (rt.visibility ?? 0) > 0.2;
@@ -835,10 +848,18 @@ export default {
         }
       }
 
-      // Presence envelopes — ease in/out so a lost hand never snaps the pane.
-      const kp = Math.min(1, dt * 3.5);
-      presL += ((gotL ? 1 : 0) - presL) * kp;
-      presR += ((gotR ? 1 : 0) - presR) * kp;
+      // Presence envelopes — quick in, slow out, and only after the hold
+      // window — so a lost hand eases the pane back to autopilot instead of
+      // snapping it. Quality: 1 = hand model, 0.4 = pose-model tips only.
+      lostL = gotL ? 0 : lostL + dt;
+      lostR = gotR ? 0 : lostR + dt;
+      const inL = lostL < HOLD_S, inR = lostR < HOLD_S;
+      presL += ((inL ? 1 : 0) - presL) * Math.min(1, dt * (inL ? 3.5 : 1.2));
+      presR += ((inR ? 1 : 0) - presR) * Math.min(1, dt * (inR ? 3.5 : 1.2));
+      const qNow = (gotL || gotR)
+        ? ((gotL ? (handsL ? 1 : 0.4) : 0) + (gotR ? (handsR ? 1 : 0.4) : 0)) / ((gotL ? 1 : 0) + (gotR ? 1 : 0))
+        : 0;
+      qual += (qNow - qual) * Math.min(1, dt * 2);
 
       // ── Grip: edge pinch vs corner frame ────────────────────────────────
       // Picture-frame corners when EITHER the thumb→index orientations are
@@ -871,26 +892,48 @@ export default {
         }
       }
 
-      // Targets: tracked corners where we have them, idle drift where not.
-      // (idle fills tgt first; tracked sides overwrite their two corners.)
+      // Targets: tracked corners where we have them, the side's held
+      // corners through a brief dropout, idle drift where not. (idle fills
+      // tgt first; tracked sides overwrite their two corners.)
       idleCorners(tgt, time, scratch.bass);
+      idle.set(tgt);
       const rect = params.shape !== 'free';
       const level = params.level ?? 0.5;
       if (!(gotL || gotR)) angPeriod = 0;   // hands gone → reseed the angle
+      let framed = false;
       if (cornersHeld && haveRays) {
         cornerFrameTargets(liX, liY, ltX, ltY, libX, libY, ltbX, ltbY,
                            riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY,
                            rect, dt, level);
-      } else {
-      if (gotL) { setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY); }
-      if (gotR) { setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY); }
+        lastFrame.set(tgt); frameAge = 0; framed = true;
+      } else if (cornersHeld && (frameAge += dt) < HOLD_S) {
+        // Corner frame lost a ray for a beat — hold the frame rather than
+        // dropping to the (much smaller) edge pane and back.
+        tgt.set(lastFrame); framed = true;
+      }
+      if (!framed) {
+      if (gotL) {
+        setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY);
+        heldL[0] = tgt[0]; heldL[1] = tgt[1]; heldL[2] = tgt[6]; heldL[3] = tgt[7];
+      } else if (inL && heldOkL) {
+        tgt[0] = heldL[0]; tgt[1] = heldL[1]; tgt[6] = heldL[2]; tgt[7] = heldL[3];
+      }
+      if (gotR) {
+        setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY);
+        heldR[0] = tgt[2]; heldR[1] = tgt[3]; heldR[2] = tgt[4]; heldR[3] = tgt[5];
+      } else if (inR && heldOkR) {
+        tgt[2] = heldR[0]; tgt[3] = heldR[1]; tgt[4] = heldR[2]; tgt[5] = heldR[3];
+      }
+      if (gotL) heldOkL = true;
+      if (gotR) heldOkR = true;
+      const useL = gotL || (inL && heldOkL), useR = gotR || (inR && heldOkR);
       // With the default selfie mirror, lmToCanvas puts the performer's
       // left hand on screen-LEFT (mirror behavior), so tracked corners are
       // already ordered left→right. With mirror off the sides land reversed;
       // swap them so u still grows left→right and the pane isn't permanently
       // inside-out. Deliberate vertical crossings (index below thumb) still
       // fold into the bowtie either way.
-      if (gotL && gotR && tgt[0] > tgt[2]) {
+      if (useL && useR && tgt[0] > tgt[2]) {
         for (let i = 0; i < 4; i++) {
           const a = i, b = i === 0 ? 1 : i === 1 ? 0 : i === 2 ? 3 : 2;
           if (a < b) {
@@ -900,7 +943,16 @@ export default {
           }
         }
       }
-      if (rect && (gotL || gotR)) rectifyEdges(dt, level);
+      if (rect && (useL || useR)) rectifyEdges(dt, level);
+      }
+
+      // Fade between the tracked pane and the autopilot by presence: the
+      // pane drifts back to idle as hands leave instead of jumping there.
+      const pFrame = Math.min(presL, presR);
+      for (let i = 0; i < 4; i++) {
+        const w = framed ? pFrame : (i === 0 || i === 3) ? presL : presR;
+        tgt[i * 2]     = idle[i * 2]     + (tgt[i * 2]     - idle[i * 2])     * w;
+        tgt[i * 2 + 1] = idle[i * 2 + 1] + (tgt[i * 2 + 1] - idle[i * 2 + 1]) * w;
       }
 
       // Lean: mean hand-plane pitch of the hand-model hands, deadzoned,
@@ -930,12 +982,20 @@ export default {
       leanS += (leanT - leanS) * Math.min(1, dt * 4);
       if (Math.abs(leanS) > 1e-3) applyLean(leanS);
 
-      // Smooth toward targets — quick enough to ride a hand sweep, slow
-      // enough to eat the 15 fps detector cadence. Seed directly on the
+      // Smooth toward targets, adaptively per corner: small errors (tracker
+      // jitter) move slowly, big ones (a real hand sweep) catch up fast.
+      // Weak tracking (pose-tier tips, or none — the autopilot) lowers both
+      // rates so the pane glides instead of twitching. Seed directly on the
       // first frame so the pane doesn't fly in from (0,0).
       if (!seeded) { cur.set(tgt); seeded = true; }
-      const k = Math.min(1, dt * 9.0);
-      for (let i = 0; i < 8; i++) cur[i] += (tgt[i] - cur[i]) * k;
+      const kLo = 1.2 + 2.8 * qual, kHi = 3 + 7 * qual;
+      const errRef = Math.hypot(W, H) * 0.05;
+      for (let i = 0; i < 4; i++) {
+        const ex = tgt[i * 2] - cur[i * 2], ey = tgt[i * 2 + 1] - cur[i * 2 + 1];
+        const f = Math.min(1, Math.hypot(ex, ey) / errRef);
+        const k = Math.min(1, dt * (kLo + (kHi - kLo) * f));
+        cur[i * 2] += ex * k; cur[i * 2 + 1] += ey * k;
+      }
 
       // Pane opacity: ghostly while idle, solid while hands drive it.
       const pres = Math.max(presL, presR) * 0.4 + Math.min(presL, presR) * 0.6;
