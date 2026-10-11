@@ -224,6 +224,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     postCanvas.style.height = canvas.style.height;
     postCanvas.width  = canvas.width;
     postCanvas.height = canvas.height;
+    syncCrawlerTop();
     updateAsciiGrid();
   }
   // Initial applyDpr() is deferred to the bottom of createOverlay so that
@@ -374,6 +375,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       else if (k === 'quantize') { const q = v === false || v == null ? 'off' : v; if (CRAWLER_QUANTIZE.includes(q)) crawlerConfig.quantize = q; }
       else if (k === 'legs')    { const n = Math.round(+v); if (n >= 4 && n <= 8) crawlerConfig.legs = n; }
       else if (k === 'silk')    { crawlerConfig.silk = !!v; }
+      else if (k === 'code')    { crawlerConfig.code = !!v; }
       else if (typeof v === 'number' && Number.isFinite(v)) crawlerConfig[k] = v;
     }
   }
@@ -1216,11 +1218,21 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // Targets per creature i:
   //   pointer → i = 0 chases the pointer, the rest wander
   //   pose    → i chases person i's most visible wrist (else head)
+  //   code    → read along the Strudel editor's words (page hands us their
+  //             rects via setCrawlerSources) while it's open and unfocused
   //   logo    → all climb the logo mark (page hands us its rect via
   //             setCrawlerSources); feet latch onto its perimeter
   //   wander  → roam
-  //   auto    → pointer (i = 0, moved in the last 3 s) → person i → logo
-  //             (when the mark is up) → wander
+  //   auto    → pointer (i = 0, moved in the last 3 s) → person i → code
+  //             (editor open + unfocused) → logo (when the mark is up) → wander
+  //
+  // Code footholds (cfg.code): while the editor is open and NOT focused, the
+  // words it shows are grip targets for every foot, whatever `follow` is.
+  // The editor panel (z18) sits above this canvas (z5), so the part of each
+  // creature inside the editor's rect is drawn on a second canvas just above
+  // the panel (#qualia-crawler-top, created on first use) and the pose
+  // canvas draws the rest — complementary clips, every pixel drawn once.
+  // Only the pose-canvas half is recorded, like the editor text itself isn't.
   // count 'pose' = one creature per tracked person (min 1).
   const crawlerSims = [];
   let crawlerGrid = null;
@@ -1254,9 +1266,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
   // External sources the page wires after its own layers exist: the logo
   // mark's stage-relative CSS rect (null when the mark is down).
-  let getLogoRect = null;
-  function setCrawlerSources({ getLogoRect: fn } = {}) {
+  let getLogoRect = null, getCodeHolds = null;
+  function setCrawlerSources({ getLogoRect: fn, getCodeHolds: codeFn } = {}) {
     if (typeof fn === 'function') getLogoRect = fn;
+    if (typeof codeFn === 'function') getCodeHolds = codeFn;
   }
   const logoRectPx = { x: 0, y: 0, w: 0, h: 0 };
   let logoUp = false;
@@ -1270,9 +1283,97 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     W: 0, H: 0, tx: 0, ty: 0, hasTarget: false, reach: 72, speed: 1, stride: 0.42,
     anchor: 0.85, boxes: 0.8, boxSize: 0.35, silk: true, audioOn: false, grid: null, gripRect: null,
     beatPulse: 0, beatActive: false, bass: 0, highs: 0, quantize: false, tick: false, rnd: crawlerRnd,
+    holds: null,
   };
   const crawlerScene = { src: null, sx: 1, sy: 1 };
   let crawlerScratchT = 0, crawlerScratchGlow = 1;
+
+  // Code footholds in device px (converted from the page's client-px rects
+  // when it rescans) + the editor's visible rect, the top-canvas clip.
+  const CODE_HOLDS_MAX = 512;
+  const codeHolds = { n: 0, rect: new Float32Array(CODE_HOLDS_MAX * 4), text: new Array(CODE_HOLDS_MAX).fill('') };
+  const codeClip = { x0: 0, y0: 0, x1: 0, y1: 0 };
+  const codeText = { fontPx: 14, family: 'monospace' };
+  let codeUp = false, codeSrcRef = null, codeSrcVersion = -1;
+  const codeStage = [0, 0, 0, 0, 0, 0];   // stage rect + canvas size at the last conversion
+  // Per-creature reading target: an index into codeHolds, re-picked on
+  // arrival (after a short dwell) — mostly the next few words, sometimes a jump.
+  const codeTgts = [];
+  for (let i = 0; i < CRAWLER_MAX; i++) codeTgts.push({ k: -1, dwell: 0, age: 0 });
+  let crawlerTop = null, crawlerTopCtx = null, crawlerTopShown = false;
+
+  function syncCrawlerTop() {
+    if (!crawlerTop) return;
+    crawlerTop.style.left = canvas.style.left;  crawlerTop.style.top = canvas.style.top;
+    crawlerTop.style.width = canvas.style.width; crawlerTop.style.height = canvas.style.height;
+    if (crawlerTop.width !== canvas.width) crawlerTop.width = canvas.width;
+    if (crawlerTop.height !== canvas.height) crawlerTop.height = canvas.height;
+  }
+  function showCrawlerTop(on) {
+    if (on && !crawlerTop) {
+      crawlerTop = document.createElement('canvas');
+      crawlerTop.id = 'qualia-crawler-top';
+      // z18 = #strudel-panel's; appended after it at runtime, so it paints on
+      // top. pointer-events:none — clicks still reach the editor.
+      crawlerTop.style.cssText = 'position:fixed;left:0;top:0;display:none;pointer-events:none;z-index:18;';
+      parent.appendChild(crawlerTop);
+      crawlerTopCtx = crawlerTop.getContext('2d');
+      syncCrawlerTop();
+    }
+    if (!crawlerTop || on === crawlerTopShown) return;
+    crawlerTopShown = on;
+    if (!on) crawlerTopCtx.clearRect(0, 0, crawlerTop.width, crawlerTop.height);
+    crawlerTop.style.display = on ? 'block' : 'none';
+  }
+
+  /** Pull the page's code holds (it throttles its own DOM scan) and convert
+   *  to device px when they or the stage changed. */
+  function syncCodeHolds() {
+    const src = crawlerConfig.code && getCodeHolds ? getCodeHolds() : null;
+    if (!src || !src.n) { codeUp = false; codeHolds.n = 0; codeSrcRef = null; return; }
+    const r = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const W = canvas.width, H = canvas.height;
+    codeUp = true;
+    const cs = codeStage;
+    if (src === codeSrcRef && src.version === codeSrcVersion && cs[0] === r.left && cs[1] === r.top
+      && cs[2] === r.width && cs[3] === r.height && cs[4] === W && cs[5] === H) return;
+    codeSrcRef = src; codeSrcVersion = src.version;
+    cs[0] = r.left; cs[1] = r.top; cs[2] = r.width; cs[3] = r.height; cs[4] = W; cs[5] = H;
+    const kx = W / Math.max(1, r.width), ky = H / Math.max(1, r.height);
+    const n = Math.min(src.n, CODE_HOLDS_MAX);
+    const S = src.rect, D = codeHolds.rect;
+    for (let k = 0, j = 0; k < n; k++, j += 4) {
+      D[j] = (S[j] - r.left) * kx; D[j + 1] = (S[j + 1] - r.top) * ky;
+      D[j + 2] = S[j + 2] * kx;    D[j + 3] = S[j + 3] * ky;
+      codeHolds.text[k] = src.text[k];
+    }
+    codeHolds.n = n;
+    const c = src.clip;
+    codeClip.x0 = (c.left - r.left) * kx; codeClip.y0 = (c.top - r.top) * ky;
+    codeClip.x1 = (c.right - r.left) * kx; codeClip.y1 = (c.bottom - r.top) * ky;
+    codeText.fontPx = (src.fontPx || 14) * ky;
+    codeText.family = src.fontFamily || 'monospace';
+  }
+
+  /** Creature i's reading target (device px) into crawlerInput; false if none. */
+  function codeTarget(i, dt) {
+    const n = codeHolds.n;
+    if (!n) return false;
+    const t = codeTgts[i], sim = crawlerSims[i];
+    const R = codeHolds.rect;
+    if (t.k < 0 || t.k >= n) { t.k = (Math.random() * n) | 0; t.dwell = 0; t.age = 0; }
+    let j = t.k * 4;
+    const near = Math.hypot(R[j] + R[j + 2] / 2 - sim.state.x, R[j + 1] + R[j + 3] / 2 - sim.state.y) < sim.state.reach * 0.5;
+    t.age += dt;
+    if (near) t.dwell += dt;
+    if (t.dwell > 0.35 || t.age > 5) {
+      t.k = Math.random() < 0.75 ? (t.k + 1 + ((Math.random() * 3) | 0)) % n : (Math.random() * n) | 0;
+      t.dwell = 0; t.age = 0; j = t.k * 4;
+    }
+    crawlerInput.tx = R[j] + R[j + 2] / 2; crawlerInput.ty = R[j + 1] + R[j + 3] / 2;
+    crawlerInput.hasTarget = true;
+    return true;
+  }
 
   function ensureCrawler() {
     if (crawlerGrid) return;
@@ -1398,10 +1499,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const mode = cfg.follow;
     const usePtr  = ptrLive  && (mode === 'pointer' || mode === 'auto');
     const usePose = !usePtr && poseLive && (mode === 'pose' || mode === 'auto');
-    const useLogo = !usePtr && !usePose && logoUp && (mode === 'logo' || mode === 'auto');
+    const useCode = !usePtr && !usePose && codeUp && (mode === 'code' || mode === 'auto');
+    const useLogo = !usePtr && !usePose && !useCode && logoUp && (mode === 'logo' || mode === 'auto');
     crawlerInput.gripRect = logoUp ? logoRectPx : null;
     if (usePtr)       { crawlerInput.tx = px; crawlerInput.ty = py; crawlerInput.hasTarget = true; }
     else if (usePose) { crawlerInput.tx = poseTgts[i].x; crawlerInput.ty = poseTgts[i].y; crawlerInput.hasTarget = true; }
+    else if (useCode) { codeTarget(i, field.dt || 0.016); }
     else if (useLogo) {
       // Fan the pack around the mark so they don't pile onto one point.
       const ang = (i / Math.max(1, n)) * Math.PI * 2 + crawlerScratchT * 0.15;
@@ -1413,7 +1516,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function tickCrawler(dt, field) {
-    if (!opts.crawler) { crawlerListen(false); return; }
+    if (!opts.crawler) { crawlerListen(false); codeUp = false; showCrawlerTop(false); return; }
     ensureCrawler();
     crawlerListen(true);
     const W = canvas.width, H = canvas.height;
@@ -1424,6 +1527,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const cfg = crawlerConfig;
     if ((crawlerFrame++ % CRAWLER_SAMPLE_EVERY) === 0 && cfg.anchor > 0.01) sampleCrawlerGrid();
     syncLogoRect();
+    syncCodeHolds();
     syncCrawlerScene();
 
     const now = performance.now();
@@ -1446,6 +1550,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     crawlerInput.silk = !!cfg.silk;
     crawlerInput.audioOn = audioOn && react > 0;
     crawlerInput.grid = cfg.anchor > 0.01 ? crawlerGrid : null;
+    crawlerInput.holds = codeUp ? codeHolds : null;
     crawlerInput.beatPulse  = audioOn ? clamp(audio.beat.pulse * react, 0, 1) : 0;
     crawlerInput.beatActive = audioOn && !!audio.beat.active && react > 0;
     crawlerInput.bass  = audioOn ? clamp(audio.bands.bass * react, 0, 1) : 0;
@@ -1467,6 +1572,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function drawCrawlerLayer() {
+    showCrawlerTop(opts.crawler && codeUp && crawlerActive > 0);
     if (!opts.crawler || !crawlerActive) return;
     const cfg = crawlerConfig;
     const name = cfg.palette;
@@ -1479,11 +1585,45 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const opt = {
       boxes: clamp(cfg.boxes, 0, 1), glow: crawlerScratchGlow, t: crawlerScratchT, dpr,
       scene: crawlerScene.src ? crawlerScene : null, rawScene: crawlerRawScene.src ? crawlerRawScene : null,
-      reblit: clamp(cfg.reblit, 0, 1), body,
+      reblit: clamp(cfg.reblit, 0, 1), body, text: codeUp ? codeText : null,
     };
+    if (!codeUp) {
+      for (let i = 0; i < crawlerActive; i++) drawCrawler(ctx, crawlerSims[i], crawlerStyle, opt);
+      return;
+    }
+    // Split at the editor's rect: inside → the top canvas (above the code),
+    // outside → the pose canvas. A creature wholly on one side draws once.
+    const c = codeClip, top = crawlerTopCtx;
+    top.clearRect(0, 0, crawlerTop.width, crawlerTop.height);
     for (let i = 0; i < crawlerActive; i++) {
-      const sim = crawlerSims[i];
-      drawCrawler(ctx, sim, crawlerStyle, opt);
+      const sim = crawlerSims[i], st = sim.state;
+      const e = st.reach * 2.6;
+      let x0 = st.x - e, y0 = st.y - e, x1 = st.x + e, y1 = st.y + e;
+      if (st.silk.alive) {
+        x0 = Math.min(x0, st.silk.x); y0 = Math.min(y0, st.silk.y);
+        x1 = Math.max(x1, st.silk.x); y1 = Math.max(y1, st.silk.y);
+      }
+      const touches = x1 > c.x0 && x0 < c.x1 && y1 > c.y0 && y0 < c.y1;
+      const within = x0 >= c.x0 && x1 <= c.x1 && y0 >= c.y0 && y1 <= c.y1;
+      if (!within) {
+        if (touches) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, canvas.width, canvas.height);
+          ctx.rect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
+          ctx.clip('evenodd');
+          drawCrawler(ctx, sim, crawlerStyle, opt);
+          ctx.restore();
+        } else drawCrawler(ctx, sim, crawlerStyle, opt);
+      }
+      if (touches) {
+        top.save();
+        top.beginPath();
+        top.rect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
+        top.clip();
+        drawCrawler(top, sim, crawlerStyle, opt);
+        top.restore();
+      }
     }
   }
 
@@ -1530,6 +1670,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     stitchPost?.dispose(); stitchPost = null;
     voxelPost?.dispose();  voxelPost = null;
     crawlerListen(false);
+    crawlerTop?.remove();
     window.removeEventListener('resize', applyDpr);
     window.removeEventListener('orientationchange', applyDpr);
   }

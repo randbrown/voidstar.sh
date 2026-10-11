@@ -167,7 +167,31 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   rect's perimeter snaps to it and boxes the whole mark, so the creature climbs the mark as it
   drifts. The page hands the overlay `logoMark.getStageRelRect()` via `setCrawlerSources`.
 
-## 6. Known limits / next steps
+## 6. Round three: crawling the code
+
+The request: let it walk over the Strudel editor text the way Rybin's walks over Wikipedia, every
+foot on a real word, but never while typing. The editor is the one part of the stage that *is*
+DOM text, so this is the reel's trick done literally rather than through the feature grid:
+
+- `crawler-code.js` (page side) scans the visible `.cm-line`s every 200 ms with a Range rect per
+  identifier-ish run (`s`, `bd`, `fast`, `2`), ≤512, and returns null while the editor is hidden or
+  focused (focus anywhere inside `#strudel-mount`; the header buttons don't count). It writes
+  nothing into CodeMirror's DOM — CM rebuilds nodes it doesn't own, and toggling classes on its
+  spans (what the reel does) would fight it, so the highlighting stays on our canvases.
+- The sim takes `holds` (device-px word rects + text). `lift()` grips the nearest word within
+  half a reach before trying the grid; the foot carries the word as `label`, the box is the word
+  rect, and the reblit pass re-prints the text (the reel's enlarged / skewed / recoloured words).
+  The silk snaps to a word too.
+- `follow: 'code'` (and auto, after pointer + pose, before logo) reads along: the target is the
+  next 1–3 words, 25% of the time a random one, re-picked after a short dwell.
+- Layering: the editor panel is z18, the pose canvas z5. Raising the pose canvas would put
+  skeletons over every HUD panel and above the stage fade, so the creature is split at the
+  editor rect instead: inside it draws on a lazily created z18 canvas after the panel, outside on
+  the pose canvas, under complementary clips (a creature wholly on one side draws once).
+- Cost: the scan is a few hundred Range rects at 5 Hz, only while engaged; per frame it's a
+  version check, plus a second clipped draw only for creatures straddling the editor edge.
+
+## 7. Known limits / next steps
 
 - Feature sampling costs one small WebGL→2D readback every 4th frame. Fine on a GPU; under
   software GL it shows as a p90 spike. `anchor = 0` skips sampling entirely (degradation path).
@@ -181,3 +205,5 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
 - A `body: 'logo'` mode (the creature *carries* the void* glyph as its body) is the other way
   to marry the two layers; the mark's sprite bake would need exporting from logo-mark.js.
 - Crowd input: `field.crowd.x/y` as a fifth `follow` source would let the audience steer it.
+- Code holds: planted feet don't ride an editor scroll (they stay put until their next step), and
+  the top-canvas half isn't recorded or cam-walked.

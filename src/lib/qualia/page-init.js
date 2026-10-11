@@ -43,6 +43,7 @@ import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { CRAWLER_DEFAULTS } from './crawler.js';
+import { createCodeFootholds } from './crawler-code.js';
 import { VOXEL_DEFAULTS } from './post-voxel.js';
 import { createChron } from './chron.js';
 import { getTheme, readKnobs, onThemeChange, cycleTheme } from './theme.js';
@@ -469,7 +470,17 @@ export function initQualiaPage() {
   });
   // The crawler layer climbs the logo mark (follow 'logo' / auto fallback):
   // feed it the mark's stage-relative rect, null while the mark is down.
-  overlay.setCrawlerSources({ getLogoRect: () => logoMark.getStageRelRect() });
+  // …and the Strudel editor's visible words while it's open and not focused
+  // (crawler-code.js; throttled DOM scan, null while typing).
+  const crawlerCode = createCodeFootholds({
+    getMount: () => document.getElementById('strudel-mount'),
+    // strudel is declared further down this init; until then it's closed.
+    isOpen: () => { try { return strudel.isOpen(); } catch { return false; } },
+  });
+  overlay.setCrawlerSources({
+    getLogoRect: () => logoMark.getStageRelRect(),
+    getCodeHolds: () => crawlerCode.scan(),
+  });
 
   core.onFrame((field) => logoMark.frame(field));
   /** Repaint fns for the logo card rows — populated by the card wiring far
@@ -3171,6 +3182,7 @@ export function initQualiaPage() {
   wireCrawlerSlider('crawler-box-size', 'boxSize');
   wireCrawlerSlider('crawler-reblit',  'reblit');
   wireCrawlerToggle('crawler-silk',    'silk');
+  wireCrawlerToggle('crawler-code',    'code');
   wireCrawlerSlider('crawler-reactivity', 'reactivity');
   wireCrawlerSelect('crawler-quantize', 'quantize');
   wireCrawlerSelect('crawler-palette', 'palette');

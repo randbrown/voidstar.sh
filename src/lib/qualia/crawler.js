@@ -25,7 +25,7 @@
 // Coordinates everywhere are the overlay canvas's device pixels; `reach`
 // (leg length) carries the DPR + size scale, nothing else does.
 
-export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'logo', 'wander'];
+export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'code', 'logo', 'wander'];
 export const CRAWLER_PALETTES = ['theme', 'reel', 'mono'];
 export const CRAWLER_COUNTS = ['1', '2', '3', '4', 'pose'];   // 'pose' = one per tracked person
 export const CRAWLER_BODIES = ['frame', 'lens', 'void'];
@@ -35,7 +35,7 @@ export const CRAWLER_QUANTIZE = ['off', 'highs', 'mids', 'beat'];
 export const CRAWLER_MAX = 4;
 
 export const CRAWLER_DEFAULTS = {
-  follow:     'auto',   // auto = pointer if it moved recently → pose → logo → wander
+  follow:     'auto',   // auto = pointer if it moved recently → pose → code (editor unfocused) → logo → wander
   count:      '1',      // '1'..'4' crawlers, or 'pose' = one per tracked person
   legs:       8,        // 4..8 — odd counts add a trailing unpaired leg
   size:       1.25,     // body scale (reach = 72 px × size × dpr)
@@ -47,6 +47,7 @@ export const CRAWLER_DEFAULTS = {
   reblit:     0.7,      // re-print the gripped patch enlarged / tilted / skewed / inverted (0 = off)
   body:       'void',   // void = scene lensed into a black core · frame = outline · lens = inverted window onto the scene
   silk:       true,     // web line shot on the bass beat toward a landmark near where it's heading
+  code:       true,     // climb onto the Strudel editor's words while it's open and NOT focused
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
   quantize:   'highs',  // step on: highs (hats) | mids (snare) | beat (kick) | off — feet lift on the hit
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
@@ -244,6 +245,23 @@ export function buildLegLayout(n) {
 }
 
 // ── Sim ─────────────────────────────────────────────────────────────────────
+/**
+ * Index of the hold (word rect) nearest (px,py) within maxD — distance to the
+ * rect, 0 inside it — or -1. Linear over ≤512 rects; only runs per step lift.
+ */
+export function nearestHold(holds, px, py, maxD) {
+  const R = holds.rect;
+  let best = -1, bd = maxD * maxD;
+  for (let k = 0, j = 0; k < holds.n; k++, j += 4) {
+    const x = R[j], y = R[j + 1];
+    const dx = px < x ? x - px : px > x + R[j + 2] ? px - x - R[j + 2] : 0;
+    const dy = py < y ? y - py : py > y + R[j + 3] ? py - y - R[j + 3] : 0;
+    const d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = k; }
+  }
+  return best;
+}
+
 export function createCrawlerSim() {
   const s = {
     x: 0, y: 0, vx: 0, vy: 0, a: -Math.PI / 2,
@@ -273,6 +291,7 @@ export function createCrawlerSim() {
       anchored: false,     // landed on an image feature (vs bare floor)
       grip: false,         // latched onto the external grip rect (the logo mark)
       variant: 0,          // re-blit treatment picked at plant (0 zoom · 1 tilt · 2 skew · 3 negative)
+      label: null,         // the code word this foot grips (holds), else null
       box: { x: 0, y: 0, w: 0, h: 0, on: false },
       kx: 0, ky: 0,        // knee cache (filled by solveLegs for the renderer)
       hx: 0, hy: 0,        // hip cache
@@ -415,7 +434,7 @@ export function createCrawlerSim() {
     const grid = inp.grid;
     const strength = inp.anchor;
     const r = s.reach;
-    f.anchored = false; f.box.on = false;
+    f.anchored = false; f.box.on = false; f.label = null;
     // Desired landing, kept inside 0.8 reach of the hip so a velocity lead
     // can't ask for a spot the leg can't hold; the seek radius below then
     // stays within L1+L2 (1.2 reach) even when it pulls outward.
@@ -443,7 +462,20 @@ export function createCrawlerSim() {
         if (inp.boxes > 0.01) { f.box.x = gr.x; f.box.y = gr.y; f.box.w = gr.w; f.box.h = gr.h; f.box.on = true; }
       }
     }
-    if (!f.grip && grid && strength > 0.01 && grid.seek(px, py, r * 0.38 * strength + 2, seekOut)) {
+    // Code words (holds): a foot landing within half a reach of a word grips
+    // it — lands on its midline, boxes exactly that word, remembers the text
+    // so the renderer can re-print it. The DOM-text half of Rybin's reel.
+    const holds = inp.holds;
+    if (!f.grip && holds && holds.n > 0) {
+      const k = nearestHold(holds, px, py, r * 0.5);
+      if (k >= 0) {
+        const R = holds.rect, j = k * 4;
+        lx = clamp(px, R[j] + R[j + 2] * 0.2, R[j] + R[j + 2] * 0.8); ly = R[j + 1] + R[j + 3] * 0.5;
+        f.anchored = true; f.label = holds.text[k];
+        if (inp.boxes > 0.01) { f.box.x = R[j] - 2; f.box.y = R[j + 1] - 1; f.box.w = R[j + 2] + 4; f.box.h = R[j + 3] + 2; f.box.on = true; }
+      }
+    }
+    if (!f.grip && !f.label && grid && strength > 0.01 && grid.seek(px, py, r * 0.38 * strength + 2, seekOut)) {
       lx = px + (seekOut.x - px) * strength;
       ly = py + (seekOut.y - py) * strength;
       f.anchored = true;
@@ -462,7 +494,7 @@ export function createCrawlerSim() {
     if (d > maxR) {
       lx = hx + dx / d * maxR; ly = hy + dy / d * maxR;
       // Pulled off the feature by the reach clamp — it's bare floor now.
-      f.anchored = false; f.box.on = false; f.grip = false;
+      f.anchored = false; f.box.on = false; f.grip = false; f.label = null;
     }
     if (f.anchored) f.variant = (inp.rnd() * 4) | 0;
     f.fromX = f.x; f.fromY = f.y; f.toX = lx; f.toY = ly;
@@ -484,6 +516,11 @@ export function createCrawlerSim() {
       const cx = clamp(ax, gr.x, gr.x + gr.w), cy = clamp(ay, gr.y, gr.y + gr.h);
       if (Math.hypot(cx - ax, cy - ay) < r * 1.5) { ax = cx; ay = cy; hit = true; }
     }
+    const holds = inp.holds;
+    if (!hit && holds && holds.n > 0) {
+      const k = nearestHold(holds, ax, ay, r * 1.2);
+      if (k >= 0) { const j = k * 4; ax = holds.rect[j] + holds.rect[j + 2] * 0.5; ay = holds.rect[j + 1] + holds.rect[j + 3] * 0.5; hit = true; }
+    }
     if (!hit && grid && grid.hasData && grid.seek(ax, ay, r * 1.2, seekOut)) { ax = seekOut.x; ay = seekOut.y; }
     // A landmark that snapped back behind the body isn't "where it's going".
     if ((ax - s.x) * (tx - s.x) + (ay - s.y) * (ty - s.y) <= 0 || Math.hypot(ax - s.x, ay - s.y) < r * 0.8) return;
@@ -503,6 +540,8 @@ export function createCrawlerSim() {
    *   boxSize,              0.05..1 box cap (× 4 reach wide)
    *   grid,                 feature grid or null
    *   gripRect,             {x,y,w,h} device px an external thing to latch onto (logo mark), or null
+   *   holds,                {n, rect: Float32Array x,y,w,h…, text[]} device px words to grip
+   *                         (the Strudel editor's, see crawler-code.js), or null
    *   beatPulse, beatActive, bass, highs,   audio (already reactivity-scaled)
    *   audioOn,              audio is live — false fires the web line on a timer instead
    *   quantize, tick,       step on a transient train: feet wait for `tick` (true on
@@ -719,9 +758,11 @@ function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
  *           inverted per foot) at this opacity
  *   body    'frame' | 'lens' | 'void' — void lenses rawScene INSIDE the body
  *           down into a black singularity
+ *   text    {fontPx, family} device-px font for re-printing gripped code words
+ *           (feet with a `label`), or null
  */
 export function drawCrawler(ctx, sim, style, {
-  boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, rawScene = null, reblit = 0, body = 'frame',
+  boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, rawScene = null, reblit = 0, body = 'frame', text = null,
 } = {}) {
   const lensSrc = rawScene || scene;
   const s = sim.state;
@@ -734,14 +775,17 @@ export function drawCrawler(ctx, sim, style, {
   // Re-blits — the gripped patch re-printed as a glowing ghost: zoomed,
   // tilted, skewed or inverted (variant picked at plant). The reel's
   // enlarged/skewed/recoloured words, in pixel space. Drawn first so the
-  // legs + boxes land on top.
-  if (reblit > 0.01 && scene && scene.src) {
-    const src = scene.src, sx = scene.sx, sy = scene.sy;
+  // legs + boxes land on top. A gripped code WORD (f.label) is re-printed
+  // as text instead — the editor is DOM, not in any scene canvas — in the
+  // box colour (or knocked out of a filled box for the negative variant).
+  if (reblit > 0.01 && ((scene && scene.src) || text)) {
+    const src = scene?.src, sx = scene?.sx, sy = scene?.sy;
     const maxSide = r * 2.6;
-    ctx.globalCompositeOperation = 'lighter';
+    if (text) { ctx.font = `${text.fontPx}px ${text.family}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; }
     for (let n = 0; n < s.legCount; n++) {
       const f = s.feet[n];
       if (f.swing || !f.box.on || !f.anchored || f.grip) continue;
+      if (f.label ? !text : !src) continue;
       const b = f.box;
       if (b.w > maxSide || b.h > maxSide || b.w < 2 || b.h < 2) continue;
       const fadeIn = clamp(f.planted * 5, 0, 1);
@@ -757,10 +801,24 @@ export function drawCrawler(ctx, sim, style, {
         case 2: ctx.transform(1.15, 0, (n & 1 ? 0.45 : -0.45), 1.15, 0, 0); break;         // skew
         default: ctx.scale(1.25, 1.25); ctx.filter = 'invert(1) hue-rotate(180deg)'; break; // negative
       }
-      ctx.globalAlpha = a;
-      try {
-        ctx.drawImage(src, b.x * sx, b.y * sy, b.w * sx, b.h * sy, -b.w / 2, -b.h / 2, b.w, b.h);
-      } catch { /* tainted / zero-size source — skip the ghost */ }
+      if (f.label) {
+        ctx.filter = 'none';
+        ctx.globalCompositeOperation = 'source-over';
+        const tpl = (n & 1) ? style.boxAlt : style.box;
+        if (f.variant === 3) {
+          ctx.fillStyle = withAlpha(tpl, a * 0.9);
+          ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h);
+          ctx.fillStyle = `rgba(0,0,0,${a.toFixed(3)})`;
+        } else ctx.fillStyle = withAlpha(tpl, a);
+        ctx.fillText(f.label, 0, 0);
+      } else {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = a;
+        try {
+          ctx.drawImage(src, b.x * sx, b.y * sy, b.w * sx, b.h * sy, -b.w / 2, -b.h / 2, b.w, b.h);
+        } catch { /* tainted / zero-size source — skip the ghost */ }
+        ctx.globalAlpha = 1;
+      }
       ctx.filter = 'none';
       ctx.restore();
     }

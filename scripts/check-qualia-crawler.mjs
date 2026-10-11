@@ -7,7 +7,7 @@
 
 import {
   solveTwoBone, createFeatureGrid, createCrawlerSim, drawCrawler, CRAWLER_STYLES, CRAWLER_DEFAULTS,
-  CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW, CRAWLER_QUANTIZE,
+  CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW, CRAWLER_QUANTIZE, nearestHold,
 } from '../src/lib/qualia/crawler.js';
 
 let failed = 0;
@@ -485,6 +485,53 @@ section('enums + renderer smoke');
     if (body === 'void') check('void body clips rings + fills the horizon', calls.includes('clip') && calls.includes('ellipse') && calls.includes('fill') && calls.includes('drawImage'));
     if (body === 'lens') check('lens body draws the scene through a clip', calls.includes('clip') && calls.includes('drawImage'));
   }
+}
+
+section('code holds — feet grip editor words');
+{
+  // Lines of 40×16 "words" with 12 px gaps, 24 px line pitch — a page of code.
+  const N = 512, rect = new Float32Array(N * 4), text = [];
+  let n = 0;
+  for (let y = 300; y < 620 && n < N; y += 24) for (let x = 60; x + 40 < 1600 && n < N; x += 52, n++) {
+    rect.set([x, y, 40, 16], n * 4); text.push(`w${n}`);
+  }
+  const holds = { n, rect, text };
+  check('nearestHold: inside a word → that word', nearestHold(holds, 65, 305, 10) === 0);
+  check('nearestHold: in a gap → a neighbour within range', [0, 1].includes(nearestHold(holds, 105, 308, 10)));
+  check('nearestHold: far away → -1', nearestHold(holds, 60, 100, 30) === -1);
+
+  const sim = createCrawlerSim();
+  sim.setLegs(7); sim.placeAt(200, 450);
+  let gripped = 0, onWord = 0;
+  run(sim, makeInput({ tx: 1300, ty: 450, anchor: 1, boxes: 1, holds }), 4, 1 / 60, () => {
+    for (let i = 0; i < sim.state.legCount; i++) {
+      const f = sim.state.feet[i];
+      if (f.swing || !f.label) continue;
+      const k = text.indexOf(f.label), j = k * 4;
+      gripped++;
+      if (k >= 0 && f.x >= rect[j] - 1 && f.x <= rect[j] + rect[j + 2] + 1 && Math.abs(f.y - (rect[j + 1] + rect[j + 3] / 2)) < 1.5
+        && Math.abs(f.box.w - (rect[j + 2] + 4)) < 1e-3) onWord++;
+    }
+  });
+  check('feet grip words while walking over code', gripped > 100, `${gripped}`);
+  check('every gripping foot stands on its word midline, boxed to it', onWord === gripped, `${onWord}/${gripped}`);
+
+  const bare = createCrawlerSim();
+  bare.setLegs(7); bare.placeAt(200, 450);
+  let labels = 0;
+  run(bare, makeInput({ tx: 1300, ty: 450, anchor: 1, boxes: 1 }), 2, 1 / 60, () => {
+    for (const f of bare.state.feet) if (f.label) labels++;
+  });
+  check('no holds → no word labels', labels === 0);
+
+  const calls = [];
+  const fakeCtx = new Proxy({}, {
+    get: (_, k) => (k === 'canvas' ? {} : (...a) => { calls.push(String(k)); return /^create.*Gradient$/.test(String(k)) ? { addColorStop() {} } : undefined; }),
+    set: () => true,
+  });
+  drawCrawler(fakeCtx, sim, CRAWLER_STYLES.reel, { body: 'frame', reblit: 1, boxes: 1, text: { fontPx: 14, family: 'monospace' } });
+  check('gripped words are re-printed as text', calls.includes('fillText'));
+  check('code is a follow mode + on by default', CRAWLER_FOLLOW.includes('code') && CRAWLER_DEFAULTS.code === true);
 }
 
 // Rescale keeps relative placement.
