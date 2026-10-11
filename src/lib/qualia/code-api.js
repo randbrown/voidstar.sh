@@ -526,7 +526,7 @@ export function installCodeApi(deps) {
       enabled: gsBool(() => page.getHornsOn?.(), (on) => page.setHornsOn?.(on)),
       /** Reaction config: {sound, logoMs, eyesMs}. `sound` names any
        *  registered Strudel sound ('' = silent; default 'voidstar' — a
-       *  bundled shabda render, registered at Strudel boot); `logoMs` /
+       *  shabda speech render registered at Strudel boot); `logoMs` /
        *  `eyesMs` are the void* logo and nightcall red-eyes flash lengths
        *  (0 = skip that flash). horns.config() reads; ({...}) merges. */
       config: gsConfig(() => page.getHornsConfig?.() || {}, (c) => page.patchHornsConfig?.(c)),

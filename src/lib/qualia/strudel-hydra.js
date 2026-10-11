@@ -143,13 +143,29 @@ async function registerSharedSamples() {
 // no samples('shabda/speech:voidstar') line. A later samples() call for the same
 // word in a pattern still wins (it registers after this). An empty or missing
 // manifest just registers nothing.
+//
+// Default words the manifest doesn't carry (it ships empty until someone runs
+// the capture script) are registered straight from shabda instead, the same
+// as a pattern's own samples('shabda/speech:voidstar'). That needs network on
+// the first play only: sw.js keeps shabda's map and audio in its runtime
+// caches, so after one online session they play offline too.
 const SPEECH_MANIFEST_URL = '/samples/speech/strudel.json';
+const DEFAULT_SPEECH_WORDS = ['voidstar'];
 async function registerSpeechSamples() {
+  let bundled = {};
   try {
     const resolved = await resolveManifest(SPEECH_MANIFEST_URL);
-    if (Object.keys(resolved.names).length) await globalThis.samples(toStrudelSampleMap(resolved));
+    bundled = resolved.names;
+    if (Object.keys(bundled).length) await globalThis.samples(toStrudelSampleMap(resolved));
   } catch (e) {
     console.info('[qualia] no bundled speech samples:', e?.message || e);
+  }
+  const missing = DEFAULT_SPEECH_WORDS.filter((w) => !(w in bundled));
+  if (!missing.length) return;
+  try {
+    await globalThis.samples(`shabda/speech:${missing.join(',')}`);
+  } catch (e) {
+    console.info(`[qualia] shabda speech (${missing.join(', ')}) unavailable:`, e?.message || e);
   }
 }
 

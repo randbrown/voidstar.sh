@@ -241,6 +241,13 @@ after the collections, so `s("voidstar")` and the horns 🤘 default sound work
 offline with no `samples()` line. A pattern's own `samples('shabda/speech:…')`
 for the same word registers later and wins.
 
+The default words (`DEFAULT_SPEECH_WORDS`, just `voidstar`) don't depend on the
+capture step: any the manifest lacks are registered from shabda at boot, the
+same call a pattern would make. That needs network the first time; the service
+worker caches shabda's map and audio, so later sessions play it offline too.
+Capturing into the manifest is only needed for offline use on a device that has
+never been online with qualia.
+
 ---
 
 ## One-click GitHub pack loader

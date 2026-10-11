@@ -480,7 +480,7 @@ qualia.pose.reset()                // every pose setting back to its default —
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands run in their own worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
                                    // reaction: one-shot sound name ('' = silent; the
-                                   // default 'voidstar' is bundled — others load first)
+                                   // default 'voidstar' registers at boot — others load first)
                                    // + void* logo / nightcall red-eyes flash lengths
                                    // (0 = skip that flash; eyes flash even with the
                                    // nightcall toggle off, and never disturb it)

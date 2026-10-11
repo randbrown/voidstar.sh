@@ -3634,15 +3634,15 @@ export function initQualiaPage() {
     }
     // Sample one-shot through superdough (same path as the sounds-panel
     // preview button). An unregistered name is a single console hint, never
-    // an error. The default 'voidstar' ships bundled (public/samples/speech,
-    // registered at Strudel boot), so it plays offline with no samples() line.
+    // an error. The default 'voidstar' registers at Strudel boot (bundled in
+    // public/samples/speech, else fetched from shabda), with no samples() line.
     const name = String(hornsConfig.sound || '').trim();
     if (name) {
       if (strudel.listSounds().some((s) => s.name === name)) {
         strudel.previewSound(name, 'sample');
       } else if (!hornsSoundHinted) {
         hornsSoundHinted = true;
-        console.info(`[qualia] horns 🤘: sound "${name}" isn't registered (yet — the bundled samples register once the Strudel panel has booted) — load it (e.g. await samples('shabda/speech:${name}'), or bundle it with scripts/fetch-shabda-speech.mjs) or point qualia.horns.config({sound:…}) at any registered sound`);
+        console.info(`[qualia] horns 🤘: sound "${name}" isn't registered (yet — speech samples register once the Strudel panel has booted, and shabda needs network the first time) — load it (e.g. await samples('shabda/speech:${name}'), or bundle it with scripts/fetch-shabda-speech.mjs) or point qualia.horns.config({sound:…}) at any registered sound`);
       }
     }
     try { window.dispatchEvent(new CustomEvent('qualia:horns', { detail: { count: hornsDetector.count() } })); } catch {}
