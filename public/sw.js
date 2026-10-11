@@ -90,14 +90,30 @@
 //     precache requests use `cache: 'reload'` so a new SW version can never
 //     re-precache stale HTTP-cache bytes; and the version bump purges v15 on
 //     every client's next load.
-const SW_VERSION = 'v16';
+// v17: offline-first boot on "lie-fi". On a plane / captive-portal wifi the
+//     device reports online but requests hang rather than fail, so the
+//     network-first navigation sat on fetch() until the browser's connect
+//     timeout (tens of seconds to minutes) before falling back — an installed
+//     setlist app looked frozen at launch. HTML navigations now race the
+//     network against NAV_TIMEOUT_MS: if a cached copy exists and the network
+//     hasn't answered by then, the cached shell is served and the network
+//     response (if it ever lands) still refreshes the cache for next time.
+//     With no cached copy we keep waiting on the network as before.
+//     /qualia joins the precache so its shell survives a first offline launch.
+const SW_VERSION = 'v17';
 const CACHE      = `voidstar-${SW_VERSION}`;
+
+// How long a page navigation waits on the network before serving the cached
+// shell instead (v17). Short enough that a hung connection feels like a normal
+// launch; long enough that a slow-but-working connection still gets fresh HTML.
+const NAV_TIMEOUT_MS = 3000;
 
 // Things we want available immediately on first install — the app shell.
 // Hashed JS chunks aren't listed; they get picked up by stale-while-
 // revalidate as the page references them.
 const PRECACHE = [
   '/',
+  '/qualia',
   '/lab/setlist',
   '/lab/mind',
   '/lab/tether',
@@ -199,28 +215,45 @@ self.addEventListener('fetch', (event) => {
   const isManifest = url.pathname.endsWith('.webmanifest');
   const isAppIcon = /^\/(icon-[\w.-]+\.png|favicon\.(svg|ico))$/.test(url.pathname);
   if (isHtml || isManifest || isAppIcon) {
-    event.respondWith(
-      // Icons revalidate past the browser HTTP cache (conditional request →
-      // cheap 304 when unchanged): a warm 1h cache would otherwise keep
-      // answering this "network-first" fetch with the very bytes we're
-      // trying to replace. HTML/manifests keep the default (their edge
-      // cache is already short).
-      fetch(isAppIcon ? new Request(req, { cache: 'no-cache' }) : req)
-        .then((res) => {
-          // Only cache good responses — a transient 5xx/404 must not
-          // poison the offline fallback for this route.
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() =>
-          // The homepage fallback is for page navigations only — handing its
-          // HTML body to a manifest request would be worse than failing.
-          caches.match(req).then((c) => c || (isHtml ? caches.match('/') : Response.error()))
-        )
-    );
+    // Icons revalidate past the browser HTTP cache (conditional request →
+    // cheap 304 when unchanged): a warm 1h cache would otherwise keep
+    // answering this "network-first" fetch with the very bytes we're
+    // trying to replace. HTML/manifests keep the default (their edge
+    // cache is already short).
+    const network = fetch(isAppIcon ? new Request(req, { cache: 'no-cache' }) : req)
+      .then((res) => {
+        // Only cache good responses — a transient 5xx/404 must not
+        // poison the offline fallback for this route.
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      });
+    // The homepage fallback is for page navigations only — handing its
+    // HTML body to a manifest request would be worse than failing.
+    const fallback = () =>
+      caches.match(req).then((c) => c || (isHtml ? caches.match('/') : null));
+    if (!isHtml) {
+      event.respondWith(network.catch(() => fallback().then((c) => c || Response.error())));
+      return;
+    }
+    // Navigations: network-first, but a hung network (lie-fi) must not hold
+    // the app hostage — after NAV_TIMEOUT_MS serve the cached shell if there
+    // is one. A late network response still lands in the cache (above).
+    event.respondWith(new Promise((resolve) => {
+      let settled = false;
+      const done = (res) => { if (!settled && res) { settled = true; resolve(res); } };
+      const timer = setTimeout(() => { fallback().then(done); }, NAV_TIMEOUT_MS);
+      network
+        .then((res) => { clearTimeout(timer); done(res); })
+        .catch(() => {
+          clearTimeout(timer);
+          fallback().then((c) => done(c || Response.error()));
+        });
+    }));
+    // Keep the SW alive until the background refresh settles.
+    event.waitUntil(network.catch(() => {}));
     return;
   }
 

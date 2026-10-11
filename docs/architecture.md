@@ -81,6 +81,21 @@ each lab's scope narrow — a broad `/` scope makes one install swallow the enti
 window, which is exactly the "it's all one app" bug this split fixed. The service worker
 (`/sw.js`, origin-wide) is shared across all of them.
 
+**Offline / lie-fi boot rule.** An installed app must launch from cache with no usable network —
+including *lie-fi* (plane or captive-portal wifi, where `navigator.onLine` is true but requests hang
+instead of failing). Three pieces keep that true; don't regress them:
+- `sw.js` serves navigations network-first but falls back to the cached page after
+  `NAV_TIMEOUT_MS` (3 s) instead of waiting out the browser's connect timeout.
+- Google Fonts load non-blocking (`media="print" onload="this.media='all'"`). A render-blocking
+  cross-origin `<link rel="stylesheet">` or a classic `<script src="https://…">` in `<head>` blocks
+  first paint on lie-fi, whatever the SW does, so never add one.
+- `StyleGuard` probes that the origin actually answers before wiping SW caches to self-heal.
+  Otherwise a lie-fi page that loads slowly would delete the only copy that can run offline.
+
+The app data layers (setlist, mind) are already local-first: IndexedDB is the source of truth,
+edits set a dirty flag, and Drive sync runs off the boot path and catches up when the network
+returns. Keep Drive/GIS/Spotify work off the first render.
+
 `page-init.js` (~5,100 lines) is the imperative integration layer that assembles `core` + `mesh` +
 `audio` + `pose` + the panels + the keymap/MIDI handlers + export/import. It is the largest single
 file and the primary structural refactor target (see `plans/maintenance-backlog.md`).
