@@ -178,7 +178,7 @@ const FOVY = 40 * Math.PI / 180;
 
 // Tunables (overlay.js holds the live copy; the voxel card's reset restores these).
 export const VOXEL_DEFAULTS = Object.freeze({
-  cellSize: 16,     // cube footprint, device px (grows past the cube cap)
+  cellSize: 10,     // cube footprint, device px (grows past the cube cap)
   depth:    1.0,    // tower height scale — brightness → height
   cutoff:   0.08,   // luminance below which a cell is void (no cube)
   gap:      0.10,   // gap between cubes, fraction of a cell

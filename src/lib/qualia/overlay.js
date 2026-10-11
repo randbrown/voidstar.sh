@@ -1226,6 +1226,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   let crawlerGrid = null;
   let crawlerSrc = null, crawlerSrcCtx = null;
   let crawlerFrame = 0, crawlerW = 0, crawlerH = 0;
+  // Step-quantize hits latched at the reactivity cadence (reactTick) and
+  // consumed by the next crawler step. A detector's `active` is true for one
+  // reactivity tick only, so sampling it from the (viz-capped) render loop
+  // drops hits whenever the two cadences drift apart, and on a sparse train
+  // (kick / snare) that's enough to unlock the gait.
+  const crawlerHits = { highs: false, mids: false, beat: false };
   let crawlerStyleName = '', crawlerStyle = null, crawlerThemeToken = 0;
   let crawlerActive = 0;
   const CRAWLER_GRID_COLS = 128;
@@ -1455,7 +1461,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const det = !audioOn || react <= 0 ? null
       : cfg.quantize === 'highs' ? audio.highs : cfg.quantize === 'mids' ? audio.mids : cfg.quantize === 'beat' ? audio.beat : null;
     crawlerInput.quantize = !!det;
-    crawlerInput.tick = !!(det && det.active);
+    crawlerInput.tick = !!det && crawlerHits[cfg.quantize];
+    crawlerHits.highs = crawlerHits.mids = crawlerHits.beat = false;
     for (let i = 0; i < n; i++) {
       const sim = crawlerSims[i];
       crawlerTarget(i, n, field, now);
@@ -1537,9 +1544,21 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // Now that all ASCII constants/functions are declared, do the first sizing.
   applyDpr();
 
+  /** Reactivity-cadence hook (core.onTick): latch transient hits so the
+   *  crawler's step quantize never misses one between rendered frames. */
+  function reactTick(field) {
+    if (!opts.crawler) return;
+    const a = field.audio;
+    if (!a?.spectrum) return;
+    if (a.highs.active) crawlerHits.highs = true;
+    if (a.mids.active)  crawlerHits.mids  = true;
+    if (a.beat.active)  crawlerHits.beat  = true;
+  }
+
   return {
     canvas,
     postCanvas,
+    reactTick,
     /** True while an ascii/mosh/edge/stitch/voxel/negative pass is rendering (post canvas shown). */
     isPostActive,
     tick,
