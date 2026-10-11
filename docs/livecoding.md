@@ -105,6 +105,23 @@ The current CPS is surfaced to the timer HUD (`chron.js`) and the sequencer.
 
 ---
 
+## Offline use
+
+Qualia works offline the way the Strudel REPL PWA does: whatever was loaded while online keeps
+working offline, and only sounds that were never fetched fail. The service worker (`public/sw.js`,
+`runtimePolicy`) caches an allowlist of cross-origin requests in two caches that survive deploys:
+
+| Cache | What | Strategy |
+|---|---|---|
+| `voidstar-media-1` | samples (any host, by audio extension), sample maps (`*.json`) and everything else from `raw.githubusercontent.com`, `felixroos.github.io` (soundfonts), `cdn.freesound.org`, `shabda.ndre.gr`; voidstar's own `/samples/` | audio cache-first, maps network-first with a 3 s deadline; LRU-trimmed to 4000 entries |
+| `voidstar-cdn-1` | `unpkg.com` / `cdn.jsdelivr.net` / `esm.sh` (the pinned `@strudel/repl` bundle, hydra, MediaPipe wasm), MediaPipe models, Google Fonts | exact-pinned (`@x.y.z`) paths cache-first, the rest network-first with the deadline |
+
+Requests from a `<script>`/`<link>` tag are no-cors, which would give an opaque response that can't
+be cached safely. The service worker re-issues those as CORS requests, which all the allowlisted
+hosts accept. To prepare for a gig with no network, play through the set once online on that device.
+Every sample and soundfont it touches is then cached. A new host that a pattern pulls from needs an
+entry in `runtimePolicy` unless its sample URLs end in an audio extension.
+
 ## Caveats & known issues (see `plans/maintenance-backlog.md`)
 
 `strudel-hydra.js` is the most fragile module in the tree:

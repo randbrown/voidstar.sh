@@ -35,7 +35,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <link rel="apple-touch-icon" href="/icon-qualia-maskable-512.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap" />
+  <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap" />
   <!-- Qualia uses its own manifest with a distinct id + a scope of /qualia so
        it installs as its own standalone app (separate from setlist/mind and the
        whole-site manifest), anchored to /qualia. A broad scope of / would make
@@ -59,12 +59,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </script>
 
   <!-- Register the PWA service worker (skipped on local dev hosts so
-       Astro's HMR isn't fighting cached assets). -->
+       Astro's HMR isn't fighting cached assets). It also caches the Strudel
+       bundle, samples and soundfonts used while online so a set runs offline;
+       persist() asks the browser not to evict those caches under storage
+       pressure (granted automatically for an installed app in Chromium). -->
   <script is:inline>
     if ('serviceWorker' in navigator
         && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
+        try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => {}); } catch (e) {}
       });
     }
   </script>

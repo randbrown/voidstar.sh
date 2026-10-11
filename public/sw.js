@@ -20,10 +20,15 @@
 //     failure. For a hashed `/_astro/*` file, a non-ok response also triggers a
 //     one-shot cache-busting retry that self-heals a poisoned edge cache (see
 //     `retryOnce`) — so a pinned cross-deploy 404 no longer needs a manual purge.
-//   - Cross-origin requests (Strudel CDN, MediaPipe models, fonts.gstatic):
-//     pass through completely — let the browser HTTP cache handle them.
-//     Caching opaque cross-origin responses fills storage with junk and
-//     can break responses we don't control the headers for.
+//   - Cross-origin requests: an ALLOWLIST (see `runtimePolicy`) is cached so
+//     qualia runs offline the way the Strudel REPL PWA does: anything played
+//     while online (Strudel bundle, sample maps, samples, soundfonts, MediaPipe
+//     models, fonts) keeps working offline; only never-fetched things fail.
+//     These live in long-lived runtime caches that a SW version bump does NOT
+//     purge. Only CORS (non-opaque) `ok` responses are stored — a no-cors
+//     request (a <script>/<link> tag) is re-issued as CORS to an allowlisted
+//     host, which all serve CORS. Everything else cross-origin (Google APIs,
+//     Drive, Spotify, the entangle relay, …) passes through untouched.
 //
 // Versioning: the CACHE name carries a SW_VERSION constant. Bumping it
 // (or just shipping a different SW body) triggers install + activate +
@@ -90,14 +95,47 @@
 //     precache requests use `cache: 'reload'` so a new SW version can never
 //     re-precache stale HTTP-cache bytes; and the version bump purges v15 on
 //     every client's next load.
-const SW_VERSION = 'v16';
+// v17: offline-first boot on "lie-fi". On a plane / captive-portal wifi the
+//     device reports online but requests hang rather than fail, so the
+//     network-first navigation sat on fetch() until the browser's connect
+//     timeout (tens of seconds to minutes) before falling back — an installed
+//     setlist app looked frozen at launch. HTML navigations now race the
+//     network against NAV_TIMEOUT_MS: if a cached copy exists and the network
+//     hasn't answered by then, the cached shell is served and the network
+//     response (if it ever lands) still refreshes the cache for next time.
+//     With no cached copy we keep waiting on the network as before.
+//     /qualia joins the precache so its shell survives a first offline launch.
+// v18: offline Strudel, like the Strudel REPL PWA. Cross-origin runtime
+//     caching for an allowlist (`runtimePolicy`): the pinned @strudel/repl
+//     bundle, hydra, sample maps + samples (GitHub raw, freesound, shabda),
+//     soundfonts, MediaPipe wasm/models and Google Fonts. Samples go in a
+//     MEDIA cache and code/models/fonts in a CDN cache; both survive SW
+//     version bumps (only the shell cache is versioned), so a deploy no longer
+//     throws away the samples a set depends on. voidstar's own /samples/ moved
+//     into the media cache for the same reason.
+const SW_VERSION = 'v18';
 const CACHE      = `voidstar-${SW_VERSION}`;
+
+// Runtime caches — deliberately NOT versioned (see v18). Names must not start
+// with `voidstar-v`: StyleGuard's self-heal only clears versioned shell caches.
+const CDN_CACHE   = 'voidstar-cdn-1';    // code, wasm, models, fonts
+const MEDIA_CACHE = 'voidstar-media-1';  // samples, sample maps, soundfonts
+const KEEP_CACHES = new Set([CACHE, CDN_CACHE, MEDIA_CACHE]);
+// Media is LRU-trimmed to this many entries (a hit is re-put, moving it to the
+// back of the key order). Dirt-Samples one-shots are ~10–100 KB each.
+const MEDIA_MAX_ENTRIES = 4000;
+
+// How long a page navigation waits on the network before serving the cached
+// shell instead (v17). Short enough that a hung connection feels like a normal
+// launch; long enough that a slow-but-working connection still gets fresh HTML.
+const NAV_TIMEOUT_MS = 3000;
 
 // Things we want available immediately on first install — the app shell.
 // Hashed JS chunks aren't listed; they get picked up by stale-while-
 // revalidate as the page references them.
 const PRECACHE = [
   '/',
+  '/qualia',
   '/lab/setlist',
   '/lab/mind',
   '/lab/tether',
@@ -138,7 +176,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => !KEEP_CACHES.has(k)).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
@@ -179,14 +217,134 @@ self.addEventListener('notificationclick', (event) => {
   })());
 });
 
+// Network-first with a deadline: answer with the network if it lands within
+// NAV_TIMEOUT_MS, else with `fallback()` (a cached copy) if there is one. A
+// network error answers with the fallback or Response.error(). A late network
+// response is still returned to the caller of `network` (which caches it).
+function networkFirstWithDeadline(network, fallback) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (res) => { if (!settled && res) { settled = true; resolve(res); } };
+    const timer = setTimeout(() => { fallback().then(done, () => {}); }, NAV_TIMEOUT_MS);
+    network
+      .then((res) => { clearTimeout(timer); done(res); })
+      .catch(() => {
+        clearTimeout(timer);
+        fallback().then((c) => done(c || Response.error()), () => done(Response.error()));
+      });
+  });
+}
+
+// ── cross-origin runtime caching (v18) ──
+const AUDIO_EXT = /\.(wav|mp3|ogg|flac|m4a|aac|opus|aiff?)$/i;
+// Sample hosts Strudel's prebake / samples() / soundfonts / speech use.
+const SAMPLE_HOSTS = new Set([
+  'raw.githubusercontent.com',  // dough-samples, Dirt-Samples, uzu-drumkit, github: packs
+  'felixroos.github.io',        // webaudiofontdata soundfonts (gm_* sounds)
+  'cdn.freesound.org',
+  'shabda.ndre.gr',             // shabda speech/sample TTS
+]);
+const CODE_CDNS = new Set(['unpkg.com', 'cdn.jsdelivr.net', 'esm.sh']);
+// `pkg@1.2.3` in the path = an exact pinned version, immutable by contract.
+const PINNED = /@\d+\.\d+\.\d+/;
+
+// → { cache, mode: 'cache-first' | 'network-first' } or null (pass through).
+function runtimePolicy(url) {
+  const host = url.hostname;
+  const path = url.pathname;
+  if (AUDIO_EXT.test(path)) return { cache: MEDIA_CACHE, mode: 'cache-first' };
+  if (SAMPLE_HOSTS.has(host)) {
+    // Sample maps can be edited upstream — fresh when online, cached offline.
+    return path.endsWith('.json')
+      ? { cache: MEDIA_CACHE, mode: 'network-first' }
+      : { cache: MEDIA_CACHE, mode: 'cache-first' };
+  }
+  if (CODE_CDNS.has(host)) {
+    return { cache: CDN_CACHE, mode: PINNED.test(path) ? 'cache-first' : 'network-first' };
+  }
+  if (host === 'storage.googleapis.com' && path.startsWith('/mediapipe-models/')) {
+    return { cache: CDN_CACHE, mode: 'cache-first' };  // versioned path (…/float16/1/…)
+  }
+  if (host === 'fonts.gstatic.com') return { cache: CDN_CACHE, mode: 'cache-first' };
+  if (host === 'fonts.googleapis.com') return { cache: CDN_CACHE, mode: 'network-first' };
+  return null;
+}
+
+let _mediaPuts = 0;
+function trimMedia() {
+  return caches.open(MEDIA_CACHE).then((c) => c.keys().then((keys) => {
+    const extra = keys.length - MEDIA_MAX_ENTRIES;
+    if (extra <= 0) return;
+    return Promise.all(keys.slice(0, extra).map((k) => c.delete(k)));
+  })).catch(() => {});
+}
+
+function putRuntime(cacheName, key, res) {
+  return caches.open(cacheName).then((c) => c.put(key, res)).then(() => {
+    if (cacheName === MEDIA_CACHE && ++_mediaPuts % 50 === 0) return trimMedia();
+  }).catch(() => {});
+}
+
+function handleRuntime(event, req, policy) {
+  // A <script>/<link> tag fetches no-cors → an opaque, uncacheable response.
+  // Every allowlisted host serves CORS, so re-issue those as CORS; a CORS
+  // response is a valid answer to a no-cors request.
+  const netReq = req.mode === 'no-cors'
+    ? new Request(req.url, { mode: 'cors', credentials: 'omit' })
+    : req;
+  // If the CORS retry itself fails (offline, or a host that dropped CORS),
+  // a no-cors request falls back to its original form — uncached, as before.
+  const fetchNet = () => fetch(netReq)
+    .catch(() => (req.mode === 'no-cors' ? fetch(req) : Promise.reject(new Error('offline'))))
+    .then((res) => {
+      if (res && res.ok && res.type !== 'opaque') {
+        event.waitUntil(putRuntime(policy.cache, req.url, res.clone()));
+      }
+      return res;
+    });
+  const cached = () => caches.open(policy.cache)
+    .then((c) => c.match(req.url, { ignoreVary: true }))
+    .then((hit) => hit || null);
+
+  if (policy.mode === 'network-first') {
+    const network = fetchNet();
+    event.respondWith(networkFirstWithDeadline(network, cached));
+    event.waitUntil(network.catch(() => {}));
+    return;
+  }
+  // cache-first: an immutable/pinned resource never needs a revalidation.
+  event.respondWith(cached().then((hit) => {
+    if (!hit) return fetchNet().catch(() => Response.error());
+    // LRU bump for media so the samples a set actually uses survive trimming.
+    if (policy.cache === MEDIA_CACHE) event.waitUntil(putRuntime(MEDIA_CACHE, req.url, hit.clone()));
+    return hit;
+  }));
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  // Only handle same-origin requests; cross-origin gets the browser's
-  // default network behaviour (no caching here, no proxying).
-  if (url.origin !== self.location.origin) return;
+  // Range requests (media elements seeking) can't be answered from a whole
+  // cached body without slicing — runtime caching leaves them to the network.
+  const ranged = req.headers.has('range');
+  // Cross-origin: only the allowlist in runtimePolicy is cached; everything
+  // else gets the browser's default network behaviour (no proxying).
+  if (url.origin !== self.location.origin) {
+    const policy = ranged ? null : runtimePolicy(url);
+    if (policy) handleRuntime(event, req, policy);
+    return;
+  }
+  // voidstar's bundled sample packs (/samples/…): same treatment as Strudel's
+  // samples, so a SW version bump doesn't drop them from offline use. Sample
+  // maps stay fresh-first (packs get edited); audio is cache-first.
+  if (!ranged && url.pathname.startsWith('/samples/')) {
+    handleRuntime(event, req, url.pathname.endsWith('.json')
+      ? { cache: MEDIA_CACHE, mode: 'network-first' }
+      : { cache: MEDIA_CACHE, mode: 'cache-first' });
+    return;
+  }
 
   // HTML pages, web app manifests, and app icons → network-first with cache
   // fallback. Manifests and icons must be fresh-first: the browser's PWA
@@ -199,28 +357,35 @@ self.addEventListener('fetch', (event) => {
   const isManifest = url.pathname.endsWith('.webmanifest');
   const isAppIcon = /^\/(icon-[\w.-]+\.png|favicon\.(svg|ico))$/.test(url.pathname);
   if (isHtml || isManifest || isAppIcon) {
-    event.respondWith(
-      // Icons revalidate past the browser HTTP cache (conditional request →
-      // cheap 304 when unchanged): a warm 1h cache would otherwise keep
-      // answering this "network-first" fetch with the very bytes we're
-      // trying to replace. HTML/manifests keep the default (their edge
-      // cache is already short).
-      fetch(isAppIcon ? new Request(req, { cache: 'no-cache' }) : req)
-        .then((res) => {
-          // Only cache good responses — a transient 5xx/404 must not
-          // poison the offline fallback for this route.
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() =>
-          // The homepage fallback is for page navigations only — handing its
-          // HTML body to a manifest request would be worse than failing.
-          caches.match(req).then((c) => c || (isHtml ? caches.match('/') : Response.error()))
-        )
-    );
+    // Icons revalidate past the browser HTTP cache (conditional request →
+    // cheap 304 when unchanged): a warm 1h cache would otherwise keep
+    // answering this "network-first" fetch with the very bytes we're
+    // trying to replace. HTML/manifests keep the default (their edge
+    // cache is already short).
+    const network = fetch(isAppIcon ? new Request(req, { cache: 'no-cache' }) : req)
+      .then((res) => {
+        // Only cache good responses — a transient 5xx/404 must not
+        // poison the offline fallback for this route.
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      });
+    // The homepage fallback is for page navigations only — handing its
+    // HTML body to a manifest request would be worse than failing.
+    const fallback = () =>
+      caches.match(req).then((c) => c || (isHtml ? caches.match('/') : null));
+    if (!isHtml) {
+      event.respondWith(network.catch(() => fallback().then((c) => c || Response.error())));
+      return;
+    }
+    // Navigations: network-first, but a hung network (lie-fi) must not hold
+    // the app hostage — after NAV_TIMEOUT_MS serve the cached shell if there
+    // is one. A late network response still lands in the cache (above).
+    event.respondWith(networkFirstWithDeadline(network, fallback));
+    // Keep the SW alive until the background refresh settles.
+    event.waitUntil(network.catch(() => {}));
     return;
   }
 

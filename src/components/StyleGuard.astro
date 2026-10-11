@@ -13,6 +13,10 @@
 // On either symptom, clear the service-worker registrations + caches and reload
 // ONCE (sessionStorage-guarded so a genuinely broken deploy doesn't loop, and
 // skipped entirely while offline so the offline fallback cache survives).
+// "Offline" includes lie-fi (plane / captive-portal wifi, where navigator.onLine
+// is true but requests hang): a half-loaded page there is the NETWORK's fault,
+// and wiping the caches would destroy the only copy of the app that can run —
+// so before clearing anything we probe that the origin actually answers.
 ---
 <script is:inline>
   (function () {
@@ -43,10 +47,30 @@
       }
       return false;
     }
+    // Resolve true only if the origin answers a cache-bypassing request
+    // promptly. The cache-buster query misses the SW cache, so the SW goes to
+    // the network (and answers Response.error() → reject when that fails).
+    function originReachable() {
+      if (!window.fetch) return Promise.resolve(true);
+      var ctrl = window.AbortController ? new AbortController() : null;
+      var t = setTimeout(function () { if (ctrl) ctrl.abort(); }, 3000);
+      return fetch('/robots.txt?sg=' + Date.now().toString(36), { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
+        .then(function (r) { clearTimeout(t); return !!(r && r.ok); })
+        .catch(function () { clearTimeout(t); return false; });
+    }
+    var _checking = false;
     function recover(broken) {
       if (navigator.onLine === false) return;   // offline: cached shell is all we have
-      if (!broken()) return;
+      if (_checking || !broken()) return;
       var KEY = 'voidstar.styleguard.reloaded';
+      try { if (sessionStorage.getItem(KEY)) return; } catch (e) { return; }
+      _checking = true;
+      originReachable().then(function (ok) {
+        _checking = false;
+        if (ok && broken()) heal(KEY);
+      });
+    }
+    function heal(KEY) {
       try {
         if (sessionStorage.getItem(KEY)) return;
         sessionStorage.setItem(KEY, '1');
@@ -59,8 +83,12 @@
           }));
         }
         if (window.caches && caches.keys) {
+          // Only the versioned app-shell caches (voidstar-v<N>) — the runtime
+          // caches (samples, Strudel bundle, models) aren't what's broken, and
+          // re-downloading them would cost a performer their offline sounds.
           work.push(caches.keys().then(function (ks) {
-            return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+            return Promise.all(ks.filter(function (k) { return k.indexOf('voidstar-v') === 0; })
+              .map(function (k) { return caches.delete(k); }));
           }));
         }
       } catch (e) { /* still reload below */ }
