@@ -13,7 +13,7 @@ All paths under `src/lib/qualia/`.
 A Reaper-style multi-track looper built into the rig panel. Captures the instrument and **snaps each
 take to the Strudel cycle grid**: the IN point locks to the next grid downbeat, OUT rounds to the
 nearest boundary, so every loop is an integer number of cycles and plays back phase-locked. Supports
-multiple tracks (one "armed"), per-track grid/length/volume/mute/fit/stretch, a retroactive **grab**
+multiple tracks (one "armed"), per-track snap (grid, labelled `snap` — the IN/OUT grid, not the loop length) / length / volume / mute / fit / stretch, a retroactive **grab**
 (pull the last N cycles from an always-on ~40 s lookback ring without having armed record), the full
 guitar channel strip, a tuner, and a rig master with limiter. Loops persist to IndexedDB and
 round-trip through `.qualem.zip`.
@@ -65,6 +65,36 @@ per-track channel (gain + optional stretch node) + transient voice (looping `Buf
 varispeed, or stretch node for fit + preserve-pitch) → loop master → rig master → limiter →
 destination, with the analyser adopted into `audio.js` as `'looper'`. Sync uses only **relative**
 durations `(boundary − pos)/cps`, so it's portable across the two AudioContexts.
+
+**Phrase lock + lock watchdog** (`looper-lock.js`, pure math, checked by
+`scripts/check-qualia-looper-lock.mjs`). Every synced take stores `anchorCycle` — the Strudel cycle
+its head was played on (record: the IN downbeat; grab: OUT − length). Playback is in lock when, at
+Strudel cycle `pos`, the loop is at phase `((pos − anchor) mod Lc) / Lc` (Lc = loop period in
+cycles). Strudel's counter restarts at 0 on every ▶, but its pattern repeats on that same counter,
+so this keeps a take on the bar of the phrase it was captured on across any stop/start on either
+side. A voice starting on a grid boundary therefore starts at the *locked phase* on that boundary,
+not always at its head (which landed multi-cycle takes a bar off the phrase whenever grid < length).
+Takes without an anchor (free takes, pre-anchor loops) lock cycle ≡ 0 (mod Lc) to the head.
+
+Voices are free-running once started, so a 250 ms watchdog compares each synced voice to Strudel's
+clock and re-locks it (dropped in at the right phase immediately) after two consecutive reads more
+than 30 ms off, or when the tempo moves by more than 1 %. That covers Strudel ■/▶, `setcps`,
+playback-sync jumps, and loops started while Strudel was stopped (they free-run, then snap in when
+it plays). It waits for `isStrudelSchedulerFresh()` so a restart's stale anchor can't trigger it.
+`tile` loops aren't a whole number of cycles, so they track Strudel's clock but don't land on bars.
+
+**Grab OUT** is the *nearest* grid boundary, like stop-record: pressed just before the downbeat, the
+grab waits for it (up to half a grid unit) instead of dropping back a whole unit and grabbing the
+previous phrase, then waits `PAD_SEC` more so a grab has the same post-roll headroom as a recorded
+take — without it a positive nudge couldn't slide a grab, so grabs sat early by the whole nudge.
+Synced with Strudel stopped, a grab is free-length at the panel cps, and the status says so.
+
+**Grab length = audible blocks.** `retro cyc` (default 8) is a *block size*, not a fixed count:
+grab walks back from OUT one block at a time and keeps every consecutive block that has sound in
+it (at least 25 % of its 50 ms windows over ≈ −40 dBFS RMS, `countAudibleBlocks` — so a pickup note poking into the end of the oldest block doesn't keep it; the pickup stays in the pre-roll), stopping at the first silent block
+or the 40 s ring — always at least one block. New tracks (and still-blank ones) take their `snap`
+from `retro cyc`, so a grab is a whole number of snap units and record IN/OUT land on block
+downbeats too.
 
 **Loop-seam crossfade.** Grid-snapped IN/OUT land mid-waveform, so a raw wrap is an amplitude step
 (a click every pass). `playVoice` bakes an 8 ms equal-power crossfade at the region tail into the
