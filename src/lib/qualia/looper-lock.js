@@ -69,27 +69,34 @@ export function retroOutCycle(pos, grid = 1) {
 }
 
 // Auto-length grab: walking back from OUT one block (= retro cyc) at a time,
-// how many consecutive blocks hold audible signal? Stops at the first block
-// that's silent throughout, so a grab takes "everything you just played"
-// in whole blocks rather than a fixed count. A block counts as audible when
-// any 50 ms window's RMS (all channels) clears `thresh` (≈ −40 dBFS) —
-// a quiet tail or an amp's hiss stays under it. Returns 0..maxBlocks.
+// how many consecutive blocks hold real playing? Stops at the first block
+// that doesn't, so a grab takes "everything you just played" in whole blocks
+// rather than a fixed count. The block is cut into 50 ms windows; a window is
+// "sounding" when its RMS (all channels) clears `thresh` (≈ −40 dBFS, so amp
+// hiss stays under it), and a block counts only when at least `minFrac` of
+// its windows sound. That fraction is what drops a pickup / lead-in note
+// that just pokes into the end of the oldest block (it stays in the take's
+// pre-roll, not the loop). Returns 0..maxBlocks.
 export const AUDIBLE_RMS = 0.01;
-export function countAudibleBlocks(chans, outFrame, blockFrames, maxBlocks, sampleRate, thresh = AUDIBLE_RMS) {
+export const AUDIBLE_MIN_FRAC = 0.25;
+export function countAudibleBlocks(chans, outFrame, blockFrames, maxBlocks, sampleRate,
+                                   thresh = AUDIBLE_RMS, minFrac = AUDIBLE_MIN_FRAC) {
   const win = Math.max(1, Math.round(0.05 * sampleRate));
   const t2 = thresh * thresh;
   let n = 0;
   for (let k = 1; k <= maxBlocks; k++) {
     const end = Math.round(outFrame - (k - 1) * blockFrames);
     const start = Math.max(0, Math.round(outFrame - k * blockFrames));
-    if (end - start < win) break;
-    let audible = false;
-    for (let w = start; w + win <= end && !audible; w += win) {
+    const total = Math.floor((end - start) / win);
+    if (total < 1) break;
+    const need = Math.max(1, Math.ceil(total * minFrac));
+    let sounding = 0;
+    for (let w = start, i = 0; i < total && sounding < need; w += win, i++) {
       let sum = 0;
-      for (const d of chans) for (let i = w; i < w + win; i++) sum += d[i] * d[i];
-      if (sum / (win * chans.length) > t2) audible = true;
+      for (const d of chans) for (let j = w; j < w + win; j++) sum += d[j] * d[j];
+      if (sum / (win * chans.length) > t2) sounding++;
     }
-    if (!audible) break;
+    if (sounding < need) break;
     n = k;
   }
   return n;

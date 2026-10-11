@@ -91,7 +91,7 @@ Synced with Strudel stopped, a grab is free-length at the panel cps, and the sta
 
 **Grab length = audible blocks.** `retro cyc` (default 8) is a *block size*, not a fixed count:
 grab walks back from OUT one block at a time and keeps every consecutive block that has sound in
-it (any 50 ms window over ≈ −40 dBFS RMS, `countAudibleBlocks`), stopping at the first silent block
+it (at least 25 % of its 50 ms windows over ≈ −40 dBFS RMS, `countAudibleBlocks` — so a pickup note poking into the end of the oldest block doesn't keep it; the pickup stays in the pre-roll), stopping at the first silent block
 or the 40 s ring — always at least one block. New tracks (and still-blank ones) take their `snap`
 from `retro cyc`, so a grab is a whole number of snap units and record IN/OUT land on block
 downbeats too.

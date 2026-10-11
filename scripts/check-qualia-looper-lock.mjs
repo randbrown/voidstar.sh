@@ -86,8 +86,14 @@ console.log(`check-qualia-looper-lock: ${n} assertions passed`);
   assert.equal(countAudibleBlocks([a], 3000, block, 6, sr), 1, 'a silent block ends the run');
   const s = new Float32Array(3000);
   assert.equal(countAudibleBlocks([s], 3000, block, 6, sr), 0, 'silence → 0 (caller keeps one block)');
-  // A block with just one short note still counts.
-  s[2900] = 0; for (let i = 2800; i < 2860; i++) s[i] = 0.2;
-  assert.equal(countAudibleBlocks([s, s], 3000, block, 6, sr), 1, 'a brief note keeps its block');
+  // Two blocks played, plus a short lead-in note poking into the end of the
+  // block before them: the pickup is dropped, the grab is 2 blocks.
+  const p = new Float32Array(3000);
+  for (let i = 2000; i < 3000; i++) p[i] = 0.3 * Math.sin(i);
+  for (let i = 1900; i < 2000; i++) p[i] = 0.3 * Math.sin(i);   // 100 ms pickup = 20 % of the block
+  assert.equal(countAudibleBlocks([p], 3000, block, 6, sr), 2, 'a lead-in note doesn\'t keep its block');
+  // A block that's half sounding (a sparse phrase) still counts.
+  for (let i = 1500; i < 1750; i++) p[i] = 0.3 * Math.sin(i);
+  assert.equal(countAudibleBlocks([p], 3000, block, 6, sr), 3, 'a half-played block counts');
   console.log('check-qualia-looper-lock: auto-length grab ok');
 }
