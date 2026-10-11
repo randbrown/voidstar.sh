@@ -172,7 +172,7 @@ grips them like the logo rect: a foot landing within half a reach of a word stan
 boxes exactly that word, and the reblit pass re-prints the word's text (zoomed / tilted / skewed /
 knocked out). `follow: 'code'` (and the auto fallback after pointer + pose) reads along the code,
 mostly a few words forward, sometimes a jump. The editor panel (z18) is above the pose canvas, so
-the part of a creature inside the editor's rect is drawn on `#qualia-crawler-top` (pointer-events
+the part of a creature inside the Strudel panel's rect (header included) is drawn on `#qualia-crawler-top` (pointer-events
 none, after the panels in DOM order, its z-index matched to the panel's: 18, or 19 once
 click-to-front raises it) and the pose canvas draws the rest under complementary clips. While
 anything in the Strudel panel has focus (typing, or a header control) the holds drop and the top

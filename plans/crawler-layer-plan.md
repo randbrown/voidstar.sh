@@ -194,6 +194,8 @@ DOM text, so this is the reel's trick done literally rather than through the fea
   creature was under the code again. The scan now reports the panel's z and the top canvas
   matches it. (Briefly it stayed above while typing too; on stage that got in the way, so focus
   anywhere in the Strudel panel now drops it back under the code until you click off the panel.)
+  The split clip was the code area at first, which cut the creature where it met the panel
+  header (legs over the code, under the header); it's the whole panel rect now.
 - Cost: the scan is a few hundred Range rects at 5 Hz, only while engaged; per frame it's a
   version check, plus a second clipped draw only for creatures straddling the editor edge.
 

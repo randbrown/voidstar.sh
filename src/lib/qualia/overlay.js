@@ -1229,7 +1229,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // Code footholds (cfg.code): while the editor is open and NOT focused, the
   // words it shows are grip targets for every foot, whatever `follow` is.
   // The editor panel (z18) sits above this canvas (z5), so the part of each
-  // creature inside the editor's rect is drawn on a second canvas just above
+  // creature inside the Strudel panel's rect is drawn on a second canvas just above
   // the panel (#qualia-crawler-top, created on first use) and the pose
   // canvas draws the rest — complementary clips, every pixel drawn once.
   // Only the pose-canvas half is recorded, like the editor text itself isn't.
@@ -1600,7 +1600,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       for (let i = 0; i < crawlerActive; i++) drawCrawler(ctx, crawlerSims[i], crawlerStyle, opt);
       return;
     }
-    // Split at the editor's rect: inside → the top canvas (above the code),
+    // Split at the Strudel panel's rect: inside → the top canvas (above the code),
     // outside → the pose canvas. A creature wholly on one side draws once.
     const c = codeClip, top = crawlerTopCtx;
     top.clearRect(0, 0, crawlerTop.width, crawlerTop.height);

@@ -29,7 +29,7 @@ const WORD = /[\p{L}\p{N}_#~]+/gu;
  *
  * CodeHolds = {
  *   n, rect: Float32Array(4·n) client-px x,y,w,h, text: string[],
- *   clip: {left, top, right, bottom} client px (the visible editor area),
+ *   clip: {left, top, right, bottom} client px (the Strudel panel's rect),
  *   fontPx, fontFamily, version (bumps on every rescan),
  *   z: the editor panel's z-index (the overlay matches it to draw above),
  * }
@@ -72,13 +72,17 @@ export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
     const left = Math.max(mr.left, sr.left), top = Math.max(mr.top, sr.top);
     const right = Math.min(mr.right, sr.right), bottom = Math.min(mr.bottom, sr.bottom);
     if (right - left < 8 || bottom - top < 8) return null;
+    // The draw-above clip is the WHOLE panel (header + tabs too), so the
+    // creature doesn't slip under the header where it meets the code; words
+    // still come only from the visible code area (left/top/right/bottom).
+    const panel = p.mount.closest('#strudel-panel') || p.mount;
+    const pr = panel.getBoundingClientRect();
     const clip = holds.clip;
-    clip.left = left; clip.top = top; clip.right = right; clip.bottom = bottom;
+    clip.left = pr.left; clip.top = pr.top; clip.right = pr.right; clip.bottom = pr.bottom;
     const cs = getComputedStyle(p.content);
     holds.fontPx = parseFloat(cs.fontSize) || 14;
     holds.fontFamily = cs.fontFamily || 'monospace';
     // The panels' click-to-front raises the focused one 18 → 19; follow it.
-    const panel = p.mount.closest('#strudel-panel') || p.mount;
     holds.z = parseInt(getComputedStyle(panel).zIndex, 10) || 18;
     let n = 0;
     const R = holds.rect;
