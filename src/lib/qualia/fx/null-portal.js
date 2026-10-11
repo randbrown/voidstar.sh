@@ -17,9 +17,11 @@
 //              Hydra (z:1), so the portal becomes a live window onto whatever
 //              Hydra is running. Live-code the other side of the portal.
 //   clean    — the plain feed, lightly graded
-// `sample` picks the mapping: 'frame' squeezes the whole displayed frame into
-// the pane (the reel look); 'lens' makes the pane a see-through magnifier of
-// what's behind it. `background` is the rest of the screen: the dimmed live
+// `sample` picks the mapping: 'frame' squeezes a centred window of the
+// displayed frame into the pane (the reel look) — `crop` sets its width as a
+// fraction of the screen, aspect-matched to the pane so nothing stretches;
+// 'lens' makes the pane a see-through window onto what's behind it, `zoom`
+// magnifying (>1) or widening (<1) the view about the pane centre. `background` is the rest of the screen: the dimmed live
 // feed, or void (near-black → effectively transparent over Hydra).
 // `grip` picks the hand geometry: 'edges' = fingertips are the corners (the
 // reel gesture, pane bounded by finger spread); 'corners' = each hand's
@@ -105,6 +107,7 @@ uniform float uDots;           // halftone cell size, px
 uniform float uGlow;           // border glow intensity
 uniform float uFlicker;        // hologram instability amount
 uniform float uZoom;           // lens-mode magnification
+uniform vec4  uFrameWin;       // frame-mode source window: x0, y0, w, h (canvas px)
 uniform vec3  uPaper, uInkA, uInkB, uEdge; // palette: paper, mid ink, dark ink, glow
 
 uniform vec4  uBands;          // (bass, mids, highs, total)
@@ -181,7 +184,7 @@ float sdSegment(vec2 p, vec2 a, vec2 b) {
 vec3 content(vec2 uv, vec2 px, vec2 cen) {
   vec2 p;
   if (uSample == 0) {
-    p = uv * uResolution;
+    p = uFrameWin.xy + uv * uFrameWin.zw;
   } else {
     vec2 q = mix(mix(uC0, uC1, uv.x), mix(uC3, uC2, uv.x), uv.y);
     p = cen + (q - cen) / max(uZoom, 0.05);
@@ -424,6 +427,10 @@ export default {
     // finger length. 'auto' flips on hand orientation (opposed V's =
     // corners). Corner grip needs the 21-pt hand model (armed while this
     // quale is active); without it the pane stays in edge grip.
+    // Frame sample: width of the centred screen window squeezed into the
+    // pane (1 = the whole screen, hands and all). Lens sample: magnification.
+    { id: 'crop',       label: 'crop',       type: 'range', min: 0.15, max: 1, step: 0.05, default: 0.4 },
+    { id: 'zoom',       label: 'zoom',       type: 'range', min: 0.5, max: 2, step: 0.05, default: 0.85 },
     { id: 'grip',       label: 'grip',       type: 'select', options: ['auto', 'edges', 'corners'], default: 'auto' },
     // 'rect': a true rectangle with a steadied, level-snapped angle.
     // 'free': the raw bilinear quad (bowties, skews, folds).
@@ -459,7 +466,7 @@ export default {
   },
 
   presets: {
-    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
+    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     crop: 0.4, zoom: 0.85, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
     blueprint: { look: 'edges',    sample: 'frame', background: 'void',   palette: 'voidglow', dots: 6,  glow: 1.0,  flicker: 0.20 },
     terminal:  { look: 'ascii',    sample: 'frame', background: 'void',   palette: 'phosphor', dots: 9,  glow: 0.6,  flicker: 0.45 },
     heatpane:  { look: 'thermal',  sample: 'lens',  background: 'camera', palette: 'gold',     dots: 7,  glow: 0.7,  flicker: 0.25 },
@@ -505,10 +512,11 @@ export default {
 
     const scratch = {
       look: 0, sample: 0, background: 0,
-      dots: 7, glow: 0.8, flicker: 0.35, zoom: 1.18,
+      dots: 7, glow: 0.8, flicker: 0.35, zoom: 0.85,
       paper: PALETTES.riso.paper, inkA: PALETTES.riso.inkA,
       inkB: PALETTES.riso.inkB, edge: PALETTES.riso.edge,
       portalAlpha: 0, spanW: 100, spanH: 40, time: 0, bass: 0,
+      winX: 0, winY: 0, winW: 1, winH: 1,
     };
     let audioRef = null;
 
@@ -941,6 +949,16 @@ export default {
       const eR   = Math.hypot(cur[4] - cur[2], cur[5] - cur[3]);
       scratch.spanW = Math.max(8, (eTop + eBot) * 0.5);
       scratch.spanH = Math.max(8, (eL + eR) * 0.5);
+
+      // Frame-sample source window: `crop` of the screen width, centred,
+      // shaped like the pane (so the content isn't stretched), shrunk to fit
+      // if a tall pane would need more than the screen height.
+      let fw = W * (params.crop ?? 0.4);
+      let fh = fw * scratch.spanH / scratch.spanW;
+      if (fh > H) { fw *= H / fh; fh = H; }
+      scratch.winX = (W - fw) / 2; scratch.winY = (H - fh) / 2;
+      scratch.winW = fw; scratch.winH = fh;
+      scratch.zoom = params.zoom ?? 0.85;
     }
 
     // Canvas-px (y-down) → video-uv (y-down) affine, honoring the preview's
@@ -1010,6 +1028,7 @@ export default {
       gl.uniform1f(U('uGlow'), scratch.glow);
       gl.uniform1f(U('uFlicker'), scratch.flicker);
       gl.uniform1f(U('uZoom'), scratch.zoom);
+      gl.uniform4f(U('uFrameWin'), scratch.winX, scratch.winY, scratch.winW, scratch.winH);
       gl.uniform3f(U('uPaper'), scratch.paper[0], scratch.paper[1], scratch.paper[2]);
       gl.uniform3f(U('uInkA'),  scratch.inkA[0],  scratch.inkA[1],  scratch.inkA[2]);
       gl.uniform3f(U('uInkB'),  scratch.inkB[0],  scratch.inkB[1],  scratch.inkB[2]);
