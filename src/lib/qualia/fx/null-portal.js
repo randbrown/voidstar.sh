@@ -419,7 +419,7 @@ export default {
 
   params: [
     { id: 'look',       label: 'look',       type: 'select', options: LOOKS, default: 'hologram' },
-    { id: 'sample',     label: 'sample',     type: 'select', options: ['frame', 'lens'], default: 'frame' },
+    { id: 'sample',     label: 'sample',     type: 'select', options: ['frame', 'lens'], default: 'lens' },
     // Hand grip → pane geometry. 'edges': fingertips ARE the four corners
     // (index+thumb per hand — the reel gesture). 'corners': each hand's
     // thumb+index V is a picture-frame CORNER; the pane spans the two apexes
@@ -466,7 +466,7 @@ export default {
   },
 
   presets: {
-    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     crop: 1, zoom: 1, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
+    default:   { look: 'hologram', sample: 'lens',  background: 'camera', palette: 'riso',     crop: 1, zoom: 1, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
     blueprint: { look: 'edges',    sample: 'frame', background: 'void',   palette: 'voidglow', dots: 6,  glow: 1.0,  flicker: 0.20 },
     terminal:  { look: 'ascii',    sample: 'frame', background: 'void',   palette: 'phosphor', dots: 9,  glow: 0.6,  flicker: 0.45 },
     heatpane:  { look: 'thermal',  sample: 'lens',  background: 'camera', palette: 'gold',     dots: 7,  glow: 0.7,  flicker: 0.25 },
