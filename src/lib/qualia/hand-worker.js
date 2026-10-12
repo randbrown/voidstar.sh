@@ -121,7 +121,9 @@ function detect(bitmap, t, arms) {
       const r = sides[s].detectForVideo(cropCanvas, t);
       const lm = r?.landmarks?.[0];
       if (!lm) continue;
-      landmarks.push(lm.map(p => ({ ...p, x: (sx0 + p.x * sd) / W, y: (sy0 + p.y * sd) / H })));
+      // z is crop-width-relative like x — rescale it with x so depth stays in
+      // frame-width units (null_portal reads hand-plane lean from it).
+      landmarks.push(lm.map(p => ({ ...p, x: (sx0 + p.x * sd) / W, y: (sy0 + p.y * sd) / H, z: p.z * sd / W })));
       handedness.push(r.handedness?.[0] ?? []);
       cropHeld[s] = true;
     } catch { /* transient — skip this side this tick */ }

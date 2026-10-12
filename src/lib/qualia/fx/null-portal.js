@@ -17,15 +17,28 @@
 //              Hydra (z:1), so the portal becomes a live window onto whatever
 //              Hydra is running. Live-code the other side of the portal.
 //   clean    — the plain feed, lightly graded
-// `sample` picks the mapping: 'frame' squeezes the whole displayed frame into
-// the pane (the reel look); 'lens' makes the pane a see-through magnifier of
-// what's behind it. `background` is the rest of the screen: the dimmed live
+// `sample` picks the mapping: 'frame' squeezes a centred window of the
+// displayed frame into the pane (the reel look) — `crop` sets its size as a
+// fraction of the screen (1 = the whole screen, the default);
+// 'lens' makes the pane a see-through window onto what's behind it, `zoom`
+// magnifying (>1) or widening (<1) the view about the pane centre. `background` is the rest of the screen: the dimmed live
 // feed, or void (near-black → effectively transparent over Hydra).
 // `grip` picks the hand geometry: 'edges' = fingertips are the corners (the
 // reel gesture, pane bounded by finger spread); 'corners' = each hand's
 // thumb+index V is a picture-frame corner and the pane spans the two apexes
 // with its edges running along the finger rays — open panes far beyond
-// finger length; 'auto' flips between them on hand orientation.
+// finger length; 'auto' flips between them on hand orientation: two
+// matching L's (index up, thumbs in) hold the edge grip, and turning ONE
+// hand 90° (thumb down, index across — a director's frame) flips to the
+// corner grip so the pane spans the diagonal between the hands.
+// `shape` 'rect' rebuilds whatever the grip produced as a true rectangle
+// whose angle is steadied (adaptive smoothing: small tremors are eaten,
+// deliberate turns follow quickly) and pulled level near horizontal by
+// `level`; in the corner grip the angle is the average of all four finger
+// rays (mod 90°) rather than per-ray intersections. 'free' keeps the raw
+// bilinear quad (bowties, skews). `lean` tilts the pane forward/back with
+// the hands: the hand-plane pitch (wrist / index / pinky base in 3D, from the
+// hand model's z) keystones the pane — top edge leaning away shrinks.
 //
 // Tracking: `wantsHands: true` below makes the page keep the 21-point
 // HandLandmarker armed while this quale is active (same model the horns 🤘
@@ -58,11 +71,22 @@ const LM_L_INDEX = 19, LM_R_INDEX = 20, LM_L_THUMB = 21, LM_R_THUMB = 22;
 // HandLandmarker per-hand indices (wrist 0 … thumb tip 4 … index tip 8).
 // The MCP (base) joints anchor the finger RAYS the corner-frame grip needs.
 const HAND_WRIST = 0, HAND_THUMB_TIP = 4, HAND_INDEX_TIP = 8;
-const HAND_THUMB_MCP = 2, HAND_INDEX_MCP = 5;
+const HAND_THUMB_MCP = 2, HAND_INDEX_MCP = 5, HAND_PINKY_MCP = 17;
+// `level` 1 → the pane angle is pulled flat within ±LEVEL_SNAP*2 of level.
+const LEVEL_SNAP = 0.14;   // rad (~8°)
+// Lean: deadzone (a natural L is rarely dead-flat to the lens), max tilt,
+// and keystone strength (how much the far edge shrinks per unit sin(tilt)).
+const LEAN_DEAD = 0.10, LEAN_MAX = 1.0, LEAN_KEYSTONE = 0.45;
 // Hand results older than this are stale (hands run up to ~15 fps, slower
 // when the hand worker is busy with crops) — fall back to
 // the pose-model fingertips rather than pinning corners to a dead frame.
 const HANDS_FRESH_MS = 450;
+// Weak-tracking calm-down. A side that drops out keeps its last corners for
+// HOLD_S before easing toward the idle autopilot (so detector blinks don't
+// yank the pane), and pose-model fingertips (the rough fallback tier) need
+// POSE_VIS confidence to drive at all.
+const HOLD_S = 0.6;
+const POSE_VIS = 0.5;
 
 // Glyph ramp for the ascii look, light → dense. Baked to a one-row atlas.
 const GLYPHS = ' .:-~=+*#%@';
@@ -89,6 +113,7 @@ uniform float uDots;           // halftone cell size, px
 uniform float uGlow;           // border glow intensity
 uniform float uFlicker;        // hologram instability amount
 uniform float uZoom;           // lens-mode magnification
+uniform vec4  uFrameWin;       // frame-mode source window: x0, y0, w, h (canvas px)
 uniform vec3  uPaper, uInkA, uInkB, uEdge; // palette: paper, mid ink, dark ink, glow
 
 uniform vec4  uBands;          // (bass, mids, highs, total)
@@ -165,7 +190,7 @@ float sdSegment(vec2 p, vec2 a, vec2 b) {
 vec3 content(vec2 uv, vec2 px, vec2 cen) {
   vec2 p;
   if (uSample == 0) {
-    p = uv * uResolution;
+    p = uFrameWin.xy + uv * uFrameWin.zw;
   } else {
     vec2 q = mix(mix(uC0, uC1, uv.x), mix(uC3, uC2, uv.x), uv.y);
     p = cen + (q - cen) / max(uZoom, 0.05);
@@ -400,7 +425,7 @@ export default {
 
   params: [
     { id: 'look',       label: 'look',       type: 'select', options: LOOKS, default: 'hologram' },
-    { id: 'sample',     label: 'sample',     type: 'select', options: ['frame', 'lens'], default: 'frame' },
+    { id: 'sample',     label: 'sample',     type: 'select', options: ['frame', 'lens'], default: 'lens' },
     // Hand grip → pane geometry. 'edges': fingertips ARE the four corners
     // (index+thumb per hand — the reel gesture). 'corners': each hand's
     // thumb+index V is a picture-frame CORNER; the pane spans the two apexes
@@ -408,7 +433,18 @@ export default {
     // finger length. 'auto' flips on hand orientation (opposed V's =
     // corners). Corner grip needs the 21-pt hand model (armed while this
     // quale is active); without it the pane stays in edge grip.
+    // Frame sample: size of the centred screen window squeezed into the
+    // pane (1 = the whole screen, hands and all). Lens sample: magnification.
+    { id: 'crop',       label: 'crop',       type: 'range', min: 0.15, max: 1, step: 0.05, default: 1 },
+    { id: 'zoom',       label: 'zoom',       type: 'range', min: 0.5, max: 2, step: 0.05, default: 1 },
     { id: 'grip',       label: 'grip',       type: 'select', options: ['auto', 'edges', 'corners'], default: 'auto' },
+    // 'rect': a true rectangle with a steadied, level-snapped angle.
+    // 'free': the raw bilinear quad (bowties, skews, folds).
+    { id: 'shape',      label: 'shape',      type: 'select', options: ['rect', 'free'], default: 'rect' },
+    // Pull toward level near horizontal (0 = off) — rect shape only.
+    { id: 'level',      label: 'level',      type: 'range', min: 0, max: 1, step: 0.05, default: 0.5 },
+    // Forward/back hand lean → pane tilt (keystone). 0 = off.
+    { id: 'lean',       label: 'lean',       type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
     { id: 'background', label: 'background', type: 'select', options: ['camera', 'void'], default: 'camera' },
     { id: 'palette',    label: 'palette',    type: 'select', options: PALETTE_NAMES, default: 'riso' },
     // Halftone cell / ascii cell / crush block size, px. Bass makes the
@@ -436,7 +472,7 @@ export default {
   },
 
   presets: {
-    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     grip: 'auto', dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
+    default:   { look: 'hologram', sample: 'lens',  background: 'camera', palette: 'riso',     crop: 1, zoom: 1, grip: 'auto', shape: 'rect', level: 0.5, lean: 1.0, dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
     blueprint: { look: 'edges',    sample: 'frame', background: 'void',   palette: 'voidglow', dots: 6,  glow: 1.0,  flicker: 0.20 },
     terminal:  { look: 'ascii',    sample: 'frame', background: 'void',   palette: 'phosphor', dots: 9,  glow: 0.6,  flicker: 0.45 },
     heatpane:  { look: 'thermal',  sample: 'lens',  background: 'camera', palette: 'gold',     dots: 7,  glow: 0.7,  flicker: 0.25 },
@@ -477,14 +513,23 @@ export default {
     let cornersHeld = false;   // grip hysteresis state (auto mode)
     // Smoothed per-side tracking presence (0..1): L drives TL/BL, R TR/BR.
     let presL = 0, presR = 0;
+    let leanS = 0;   // smoothed pane tilt (rad, + = top edge away)
+    // Weak-tracking state: seconds since each side was last seen, its last
+    // tracked corners (screen px), the last corner-frame target, and the
+    // smoothed tracking quality (0 autopilot … 1 hand model).
+    let lostL = 1e9, lostR = 1e9, heldOkL = false, heldOkR = false;
+    const heldL = new Float32Array(4), heldR = new Float32Array(4);
+    const lastFrame = new Float32Array(8), idle = new Float32Array(8);
+    let frameAge = 1e9, qual = 0;
     const camMat = new Float32Array(9);
 
     const scratch = {
       look: 0, sample: 0, background: 0,
-      dots: 7, glow: 0.8, flicker: 0.35, zoom: 1.18,
+      dots: 7, glow: 0.8, flicker: 0.35, zoom: 1,
       paper: PALETTES.riso.paper, inkA: PALETTES.riso.inkA,
       inkB: PALETTES.riso.inkB, edge: PALETTES.riso.edge,
       portalAlpha: 0, spanW: 100, spanH: 40, time: 0, bass: 0,
+      winX: 0, winY: 0, winW: 1, winH: 1,
     };
     let audioRef = null;
 
@@ -503,12 +548,100 @@ export default {
       const th = 0.12 * Math.sin(t * 0.07);
       const hw = W * (0.165 + 0.02 * Math.sin(t * 0.21) + 0.035 * bass);
       const hh = H * (0.058 + 0.012 * Math.sin(t * 0.17 + 0.8));
-      const ux = Math.cos(th) * hw, uy = Math.sin(th) * hw;
-      const vx = -Math.sin(th) * hh, vy = Math.cos(th) * hh;
-      arr[0] = cx - ux - vx; arr[1] = cy - uy - vy;   // TL
-      arr[2] = cx + ux - vx; arr[3] = cy + uy - vy;   // TR
-      arr[4] = cx + ux + vx; arr[5] = cy + uy + vy;   // BR
-      arr[6] = cx - ux + vx; arr[7] = cy - uy + vy;   // BL
+      writeRect(arr, cx, cy, Math.cos(th), Math.sin(th), hw, hh);
+    }
+
+    // Rectangle centred on (cx,cy), unit axis u=(ux,uy) (v = u rotated +90°,
+    // pointing screen-down at θ=0), half-extents hw/hh (signed — a negative
+    // extent flips the pane). Writes TL,TR,BR,BL.
+    function writeRect(arr, cx, cy, ux, uy, hw, hh) {
+      const ax = ux * hw, ay = uy * hw;
+      const bx = -uy * hh, by = ux * hh;
+      arr[0] = cx - ax - bx; arr[1] = cy - ay - by;   // TL
+      arr[2] = cx + ax - bx; arr[3] = cy + ay - by;   // TR
+      arr[4] = cx + ax + bx; arr[5] = cy + ay + by;   // BR
+      arr[6] = cx - ax + bx; arr[7] = cy - ay + by;   // BL
+    }
+
+    function wrapA(a, period) { return a - period * Math.round(a / period); }
+
+    // Steadied pane angle. Adaptive one-pole: the rate grows with the error,
+    // so detector tremor (a degree or two) barely moves the pane while a
+    // deliberate twist catches up in a few frames. `period` is the angle's
+    // symmetry (π: a left→right edge; π/2: a frame's axes) — a change of
+    // period (grip flip) or a hands-free gap reseeds. Then the level pull:
+    // inside ±2·dz of flat the angle is scaled toward 0 (quadratic, so it
+    // sits dead level near horizontal and stays continuous at the edge).
+    let angS = 0, angPeriod = 0;
+    function steadyAngle(raw, period, dt, level) {
+      if (period !== angPeriod) { angS = wrapA(raw, period); angPeriod = period; }
+      const d = wrapA(raw - angS, period);
+      angS = wrapA(angS + d * Math.min(1, dt * (2.5 + 40 * Math.abs(d))), period);
+      const dz = level * LEVEL_SNAP;
+      return dz > 1e-4 ? angS * Math.min(1, Math.abs(angS) / (2 * dz)) : angS;
+    }
+
+    // Edge grip → rectangle: centre = quad centroid, angle = left-side
+    // midpoint → right-side midpoint (raise one hand to tilt), extents =
+    // the quad's mean spans projected on the steadied axes (signed, so
+    // index-below-thumb still flips the pane).
+    function rectifyEdges(dt, level) {
+      const lx = (tgt[0] + tgt[6]) / 2, ly = (tgt[1] + tgt[7]) / 2;
+      const rx = (tgt[2] + tgt[4]) / 2, ry = (tgt[3] + tgt[5]) / 2;
+      const tx = (tgt[0] + tgt[2]) / 2, ty = (tgt[1] + tgt[3]) / 2;
+      const bx = (tgt[6] + tgt[4]) / 2, by = (tgt[7] + tgt[5]) / 2;
+      const th = steadyAngle(Math.atan2(ry - ly, rx - lx), Math.PI, dt, level);
+      const ux = Math.cos(th), uy = Math.sin(th);
+      const hw = ((rx - lx) * ux + (ry - ly) * uy) / 2;
+      const hh = ((bx - tx) * -uy + (by - ty) * ux) / 2;
+      writeRect(tgt, (lx + rx) / 2, (ly + ry) / 2, ux, uy, hw, hh);
+    }
+
+    // Hand-plane pitch (rad) about the pane's horizontal axis: + = the top
+    // edge leans AWAY from the camera. Plane = wrist / index MCP / pinky
+    // MCP in 3D camera px (z is frame-width-relative, like x); its normal,
+    // flipped to face the lens, is mapped to screen through lmToCanvas
+    // (mirror/rotation) and read against the pane's down axis (dvx,dvy).
+    // NaN when the hand has no usable depth.
+    function handLean(lm, vw, vh, dvx, dvy) {
+      const w = lm[HAND_WRIST], a = lm[HAND_INDEX_MCP], b = lm[HAND_PINKY_MCP];
+      if (!(Number.isFinite(w.z) && Number.isFinite(a.z) && Number.isFinite(b.z))) return NaN;
+      const ax = (a.x - w.x) * vw, ay = (a.y - w.y) * vh, az = (a.z - w.z) * vw;
+      const bx = (b.x - w.x) * vw, by = (b.y - w.y) * vh, bz = (b.z - w.z) * vw;
+      let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+      const nl = Math.hypot(nx, ny, nz);
+      if (nl < 1e-6) return NaN;
+      if (nz > 0) { nx = -nx; ny = -ny; nz = -nz; }   // smaller z = nearer
+      nx /= nl; ny /= nl; nz /= nl;
+      const nxy = Math.hypot(nx, ny);
+      if (nxy < 1e-6) return 0;
+      const [x0, y0] = lmToCanvas(0.5, 0.5, W, H);
+      const [x1, y1] = lmToCanvas(0.5 + nx * 0.1, 0.5 + ny * 0.1, W, H);
+      const sl = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const sv = ((x1 - x0) * dvx + (y1 - y0) * dvy) / sl * nxy;
+      return Math.atan2(-sv, -nz);
+    }
+
+    // Keystone tgt by tilt phi (+ = top away): the far edge narrows, the
+    // near edge widens, and the height foreshortens by cos(phi). Works on
+    // any quad (axes from its mean edges), so 'free' shape tilts too.
+    function applyLean(phi) {
+      const cx = (tgt[0] + tgt[2] + tgt[4] + tgt[6]) / 4;
+      const cy = (tgt[1] + tgt[3] + tgt[5] + tgt[7]) / 4;
+      let ux = (tgt[2] - tgt[0]) + (tgt[4] - tgt[6]);
+      let uy = (tgt[3] - tgt[1]) + (tgt[5] - tgt[7]);
+      const ul = Math.hypot(ux, uy);
+      if (ul < 1e-3) return;
+      ux /= ul; uy /= ul;
+      const vx = -uy, vy = ux;
+      const s = Math.sin(phi) * LEAN_KEYSTONE, c = Math.cos(phi);
+      for (let i = 0; i < 4; i++) {
+        const rx = tgt[i * 2] - cx, ry = tgt[i * 2 + 1] - cy;
+        const wu = (rx * ux + ry * uy) * (i < 2 ? 1 - s : 1 + s);
+        const hv = (rx * vx + ry * vy) * c;
+        tgt[i * 2] = cx + ux * wu + vx * hv;
+        tgt[i * 2 + 1] = cy + uy * wu + vy * hv;
+      }
     }
 
     // Intersect line P+t·d with line Q+s·e into isect. False when parallel.
@@ -528,7 +661,8 @@ export default {
     // the axis-aligned rectangle on the apex diagonal. All in screen px
     // (post-lmToCanvas) so the frame is what the audience actually sees.
     function cornerFrameTargets(liX, liY, ltX, ltY, libX, libY, ltbX, ltbY,
-                                riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY) {
+                                riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY,
+                                rect, dt, level) {
       const [litx, lity] = lmToCanvas(liX, liY, W, H);
       const [libx, liby] = lmToCanvas(libX, libY, W, H);
       const [lttx, ltty] = lmToCanvas(ltX, ltY, W, H);
@@ -540,8 +674,8 @@ export default {
       // Finger ray directions, base (MCP) → tip.
       const lidx = litx - libx, lidy = lity - liby;
       const ltdx = lttx - ltbx, ltdy = ltty - ltby;
-      const ridx = ritx - ribx, ridy = rity - riby;
-      const rtdx = rttx - rtbx, rtdy = rtty - rtby;
+      let ridx = ritx - ribx, ridy = rity - riby;
+      let rtdx = rttx - rtbx, rtdy = rtty - rtby;
       // Apex per hand; the web midpoint when the rays are near-parallel.
       // The det threshold alone can't catch a RELAXED hand (thumb almost
       // parallel to index): the intersection exists but lands thousands of
@@ -560,7 +694,38 @@ export default {
           Math.hypot(isect[0] - rwx, isect[1] - rwy) < apexFar) {
         bx = isect[0]; by = isect[1];
       }
-      // Cross-hand corners: L-index ray × R-thumb ray, and vice versa.
+      if (rect) {
+        // Rectangle on the apex diagonal. Its angle is the length-weighted
+        // mean of all four finger rays mod 90° (averaged as 4θ) — far
+        // steadier than letting each noisy ray place a corner.
+        let C = 0, S = 0;
+        const acc = (dx, dy) => {
+          const a = 4 * Math.atan2(dy, dx), w = Math.hypot(dx, dy);
+          C += w * Math.cos(a); S += w * Math.sin(a);
+        };
+        acc(lidx, lidy); acc(ltdx, ltdy); acc(ridx, ridy); acc(rtdx, rtdy);
+        const th = steadyAngle(Math.atan2(S, C) / 4, Math.PI / 2, dt, level);
+        const ux = Math.cos(th), uy = Math.sin(th);
+        const dx = bx - ax, dy = by - ay;
+        const du = dx * ux + dy * uy, dv = dx * -uy + dy * ux;
+        cyc[0] = ax;            cyc[1] = ay;
+        cyc[2] = ax + ux * du;  cyc[3] = ay + uy * du;
+        cyc[4] = bx;            cyc[5] = by;
+        cyc[6] = ax - uy * dv;  cyc[7] = ay + ux * dv;
+        orderCycle();
+        return;
+      }
+      // Cross-hand corners: each L ray meets the R ray most perpendicular
+      // to it. A 180°-turned V pairs index × thumb; a real director's frame
+      // (left L + right hand turned 90°, mirror-image hands) pairs index ×
+      // index and thumb × thumb — swap the R rays so one code path serves.
+      const nli = Math.hypot(lidx, lidy) || 1;
+      const cIdx = Math.abs(lidx * ridx + lidy * ridy) / (nli * (Math.hypot(ridx, ridy) || 1));
+      const cThb = Math.abs(lidx * rtdx + lidy * rtdy) / (nli * (Math.hypot(rtdx, rtdy) || 1));
+      if (cIdx < cThb) {
+        const tx = ridx, ty = ridy;
+        ridx = rtdx; ridy = rtdy; rtdx = tx; rtdy = ty;
+      }
       const far = Math.hypot(W, H) * 1.6;
       const mx = (ax + bx) / 2, my = (ay + by) / 2;
       let p1x, p1y, p2x, p2y;
@@ -578,6 +743,11 @@ export default {
       // which corner, and either hand can be either corner.
       cyc[0] = ax;  cyc[1] = ay;  cyc[2] = p1x; cyc[3] = p1y;
       cyc[4] = bx;  cyc[5] = by;  cyc[6] = p2x; cyc[7] = p2y;
+      orderCycle();
+    }
+
+    // Write the cyc corner cycle into tgt as TL,TR,BR,BL (see above).
+    function orderCycle() {
       let i0 = 0, bestS = Infinity;
       for (let i = 0; i < 4; i++) {
         const ss = cyc[i * 2] + cyc[i * 2 + 1];
@@ -619,16 +789,17 @@ export default {
       // anchor the rays the corner-frame grip needs.
       let libX = 0, libY = 0, ltbX = 0, ltbY = 0;
       let ribX = 0, ribY = 0, rtbX = 0, rtbY = 0;
+      let lmL = null, lmR = null;   // per-side hand-model landmarks (lean)
       if (raw && raw.length >= 33) {
         const li = raw[LM_L_INDEX], lt = raw[LM_L_THUMB];
         const ri = raw[LM_R_INDEX], rt = raw[LM_R_THUMB];
-        if (li && (li.visibility ?? 0) > 0.25) {
+        if (li && (li.visibility ?? 0) > POSE_VIS) {
           gotL = true;
           liX = li.x; liY = li.y;
           const tOk = lt && (lt.visibility ?? 0) > 0.2;
           ltX = tOk ? lt.x : li.x; ltY = tOk ? lt.y : li.y + 0.08;
         }
-        if (ri && (ri.visibility ?? 0) > 0.25) {
+        if (ri && (ri.visibility ?? 0) > POSE_VIS) {
           gotR = true;
           riX = ri.x; riY = ri.y;
           const tOk = rt && (rt.visibility ?? 0) > 0.2;
@@ -662,13 +833,13 @@ export default {
             isLeft = wx >= 0.5;   // camera-frame is mirrored on screen
           }
           if (isLeft) {
-            gotL = true; handsL = true;
+            gotL = true; handsL = true; lmL = lm;
             liX = sc(lm[HAND_INDEX_TIP].x); liY = sc(lm[HAND_INDEX_TIP].y);
             ltX = sc(lm[HAND_THUMB_TIP].x); ltY = sc(lm[HAND_THUMB_TIP].y);
             libX = sc(lm[HAND_INDEX_MCP].x); libY = sc(lm[HAND_INDEX_MCP].y);
             ltbX = sc(lm[HAND_THUMB_MCP].x); ltbY = sc(lm[HAND_THUMB_MCP].y);
           } else {
-            gotR = true; handsR = true;
+            gotR = true; handsR = true; lmR = lm;
             riX = sc(lm[HAND_INDEX_TIP].x); riY = sc(lm[HAND_INDEX_TIP].y);
             rtX = sc(lm[HAND_THUMB_TIP].x); rtY = sc(lm[HAND_THUMB_TIP].y);
             ribX = sc(lm[HAND_INDEX_MCP].x); ribY = sc(lm[HAND_INDEX_MCP].y);
@@ -677,17 +848,28 @@ export default {
         }
       }
 
-      // Presence envelopes — ease in/out so a lost hand never snaps the pane.
-      const kp = Math.min(1, dt * 3.5);
-      presL += ((gotL ? 1 : 0) - presL) * kp;
-      presR += ((gotR ? 1 : 0) - presR) * kp;
+      // Presence envelopes — quick in, slow out, and only after the hold
+      // window — so a lost hand eases the pane back to autopilot instead of
+      // snapping it. Quality: 1 = hand model, 0.4 = pose-model tips only.
+      lostL = gotL ? 0 : lostL + dt;
+      lostR = gotR ? 0 : lostR + dt;
+      const inL = lostL < HOLD_S, inR = lostR < HOLD_S;
+      presL += ((inL ? 1 : 0) - presL) * Math.min(1, dt * (inL ? 3.5 : 1.2));
+      presR += ((inR ? 1 : 0) - presR) * Math.min(1, dt * (inR ? 3.5 : 1.2));
+      const qNow = (gotL || gotR)
+        ? ((gotL ? (handsL ? 1 : 0.4) : 0) + (gotR ? (handsR ? 1 : 0.4) : 0)) / ((gotL ? 1 : 0) + (gotR ? 1 : 0))
+        : 0;
+      qual += (qNow - qual) * Math.min(1, dt * 2);
 
       // ── Grip: edge pinch vs corner frame ────────────────────────────────
-      // Opposed thumb→index orientations (two V's pointed at each other)
-      // read as picture-frame corners; matching orientations are the edge
-      // pinch. Auto flips with hysteresis so a half-rotated hand doesn't
-      // flap between grips mid-move. Corner grip needs finger rays, i.e.
-      // both sides from the hand model.
+      // Picture-frame corners when EITHER the thumb→index orientations are
+      // opposed (two V's pointed at each other, a 180° turn) OR the index
+      // fingers cross at roughly a right angle (one hand turned 90°: thumb
+      // down, index across — the director's frame). Two matching L's
+      // (indices parallel) and the reel pinch (thumb→index vectors
+      // parallel) stay edges. Auto flips with hysteresis so a half-rotated
+      // hand doesn't flap between grips mid-move. Corner grip needs finger
+      // rays, i.e. both sides from the hand model.
       const haveRays = handsL && handsR;
       if (params.grip === 'edges') cornersHeld = false;
       else if (params.grip === 'corners') cornersHeld = true;
@@ -695,29 +877,63 @@ export default {
         const vlx = liX - ltX, vly = liY - ltY;
         const vrx = riX - rtX, vry = riY - rtY;
         const nl = Math.hypot(vlx, vly), nr = Math.hypot(vrx, vry);
-        if (nl > 1e-4 && nr > 1e-4) {
+        // Index rays (MCP → tip) — aspect-corrected so 'perpendicular'
+        // means perpendicular on screen-shaped pixels, not unit squares.
+        const v = getVideoEl();
+        const asp = v && v.videoHeight > 0 ? v.videoWidth / v.videoHeight : 16 / 9;
+        const ilx = (liX - libX) * asp, ily = liY - libY;
+        const irx = (riX - ribX) * asp, iry = riY - ribY;
+        const il = Math.hypot(ilx, ily), ir = Math.hypot(irx, iry);
+        if (nl > 1e-4 && nr > 1e-4 && il > 1e-4 && ir > 1e-4) {
           const d = (vlx * vrx + vly * vry) / (nl * nr);
-          if (d < -0.35) cornersHeld = true;
-          else if (d > -0.05) cornersHeld = false;
+          const ci = Math.abs(ilx * irx + ily * iry) / (il * ir);
+          if (d < -0.35 || ci < 0.4) cornersHeld = true;
+          else if (d > -0.05 && ci > 0.7) cornersHeld = false;
         }
       }
 
-      // Targets: tracked corners where we have them, idle drift where not.
-      // (idle fills tgt first; tracked sides overwrite their two corners.)
+      // Targets: tracked corners where we have them, the side's held
+      // corners through a brief dropout, idle drift where not. (idle fills
+      // tgt first; tracked sides overwrite their two corners.)
       idleCorners(tgt, time, scratch.bass);
+      idle.set(tgt);
+      const rect = params.shape !== 'free';
+      const level = params.level ?? 0.5;
+      if (!(gotL || gotR)) angPeriod = 0;   // hands gone → reseed the angle
+      let framed = false;
       if (cornersHeld && haveRays) {
         cornerFrameTargets(liX, liY, ltX, ltY, libX, libY, ltbX, ltbY,
-                           riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY);
-      } else {
-      if (gotL) { setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY); }
-      if (gotR) { setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY); }
+                           riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY,
+                           rect, dt, level);
+        lastFrame.set(tgt); frameAge = 0; framed = true;
+      } else if (cornersHeld && (frameAge += dt) < HOLD_S) {
+        // Corner frame lost a ray for a beat — hold the frame rather than
+        // dropping to the (much smaller) edge pane and back.
+        tgt.set(lastFrame); framed = true;
+      }
+      if (!framed) {
+      if (gotL) {
+        setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY);
+        heldL[0] = tgt[0]; heldL[1] = tgt[1]; heldL[2] = tgt[6]; heldL[3] = tgt[7];
+      } else if (inL && heldOkL) {
+        tgt[0] = heldL[0]; tgt[1] = heldL[1]; tgt[6] = heldL[2]; tgt[7] = heldL[3];
+      }
+      if (gotR) {
+        setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY);
+        heldR[0] = tgt[2]; heldR[1] = tgt[3]; heldR[2] = tgt[4]; heldR[3] = tgt[5];
+      } else if (inR && heldOkR) {
+        tgt[2] = heldR[0]; tgt[3] = heldR[1]; tgt[4] = heldR[2]; tgt[5] = heldR[3];
+      }
+      if (gotL) heldOkL = true;
+      if (gotR) heldOkR = true;
+      const useL = gotL || (inL && heldOkL), useR = gotR || (inR && heldOkR);
       // With the default selfie mirror, lmToCanvas puts the performer's
       // left hand on screen-LEFT (mirror behavior), so tracked corners are
       // already ordered left→right. With mirror off the sides land reversed;
       // swap them so u still grows left→right and the pane isn't permanently
       // inside-out. Deliberate vertical crossings (index below thumb) still
       // fold into the bowtie either way.
-      if (gotL && gotR && tgt[0] > tgt[2]) {
+      if (useL && useR && tgt[0] > tgt[2]) {
         for (let i = 0; i < 4; i++) {
           const a = i, b = i === 0 ? 1 : i === 1 ? 0 : i === 2 ? 3 : 2;
           if (a < b) {
@@ -727,14 +943,59 @@ export default {
           }
         }
       }
+      if (rect && (useL || useR)) rectifyEdges(dt, level);
       }
 
-      // Smooth toward targets — quick enough to ride a hand sweep, slow
-      // enough to eat the 15 fps detector cadence. Seed directly on the
+      // Fade between the tracked pane and the autopilot by presence: the
+      // pane drifts back to idle as hands leave instead of jumping there.
+      const pFrame = Math.min(presL, presR);
+      for (let i = 0; i < 4; i++) {
+        const w = framed ? pFrame : (i === 0 || i === 3) ? presL : presR;
+        tgt[i * 2]     = idle[i * 2]     + (tgt[i * 2]     - idle[i * 2])     * w;
+        tgt[i * 2 + 1] = idle[i * 2 + 1] + (tgt[i * 2 + 1] - idle[i * 2 + 1]) * w;
+      }
+
+      // Lean: mean hand-plane pitch of the hand-model hands, deadzoned,
+      // gained, clamped, then smoothed (z is the noisiest axis the hand
+      // model gives) — eases back to flat when no hand carries depth.
+      let leanT = 0;
+      const leanGain = params.lean ?? 1;
+      if (leanGain > 0 && (lmL || lmR)) {
+        const dvx0 = (tgt[6] - tgt[0]) + (tgt[4] - tgt[2]);
+        const dvy0 = (tgt[7] - tgt[1]) + (tgt[5] - tgt[3]);
+        const dl = Math.hypot(dvx0, dvy0) || 1;
+        const v = getVideoEl();
+        const vw = v && v.videoWidth > 0 ? v.videoWidth : 16;
+        const vh = v && v.videoHeight > 0 ? v.videoHeight : 9;
+        let sum = 0, n = 0;
+        for (const lm of [lmL, lmR]) {
+          if (!lm) continue;
+          const a = handLean(lm, vw, vh, dvx0 / dl, dvy0 / dl);
+          if (Number.isFinite(a)) { sum += a; n++; }
+        }
+        if (n) {
+          const a = sum / n;
+          const m = Math.max(0, Math.abs(a) - LEAN_DEAD) * leanGain;
+          leanT = Math.sign(a) * Math.min(LEAN_MAX, m);
+        }
+      }
+      leanS += (leanT - leanS) * Math.min(1, dt * 4);
+      if (Math.abs(leanS) > 1e-3) applyLean(leanS);
+
+      // Smooth toward targets, adaptively per corner: small errors (tracker
+      // jitter) move slowly, big ones (a real hand sweep) catch up fast.
+      // Weak tracking (pose-tier tips, or none — the autopilot) lowers both
+      // rates so the pane glides instead of twitching. Seed directly on the
       // first frame so the pane doesn't fly in from (0,0).
       if (!seeded) { cur.set(tgt); seeded = true; }
-      const k = Math.min(1, dt * 9.0);
-      for (let i = 0; i < 8; i++) cur[i] += (tgt[i] - cur[i]) * k;
+      const kLo = 1.2 + 2.8 * qual, kHi = 3 + 7 * qual;
+      const errRef = Math.hypot(W, H) * 0.05;
+      for (let i = 0; i < 4; i++) {
+        const ex = tgt[i * 2] - cur[i * 2], ey = tgt[i * 2 + 1] - cur[i * 2 + 1];
+        const f = Math.min(1, Math.hypot(ex, ey) / errRef);
+        const k = Math.min(1, dt * (kLo + (kHi - kLo) * f));
+        cur[i * 2] += ex * k; cur[i * 2 + 1] += ey * k;
+      }
 
       // Pane opacity: ghostly while idle, solid while hands drive it.
       const pres = Math.max(presL, presR) * 0.4 + Math.min(presL, presR) * 0.6;
@@ -748,6 +1009,14 @@ export default {
       const eR   = Math.hypot(cur[4] - cur[2], cur[5] - cur[3]);
       scratch.spanW = Math.max(8, (eTop + eBot) * 0.5);
       scratch.spanH = Math.max(8, (eL + eR) * 0.5);
+
+      // Frame-sample source window: `crop` of the screen, centred (1 = the
+      // whole screen squeezed into the pane, the original reel look).
+      const crop = params.crop ?? 1;
+      const fw = W * crop, fh = H * crop;
+      scratch.winX = (W - fw) / 2; scratch.winY = (H - fh) / 2;
+      scratch.winW = fw; scratch.winH = fh;
+      scratch.zoom = params.zoom ?? 1;
     }
 
     // Canvas-px (y-down) → video-uv (y-down) affine, honoring the preview's
@@ -817,6 +1086,7 @@ export default {
       gl.uniform1f(U('uGlow'), scratch.glow);
       gl.uniform1f(U('uFlicker'), scratch.flicker);
       gl.uniform1f(U('uZoom'), scratch.zoom);
+      gl.uniform4f(U('uFrameWin'), scratch.winX, scratch.winY, scratch.winW, scratch.winH);
       gl.uniform3f(U('uPaper'), scratch.paper[0], scratch.paper[1], scratch.paper[2]);
       gl.uniform3f(U('uInkA'),  scratch.inkA[0],  scratch.inkA[1],  scratch.inkA[2]);
       gl.uniform3f(U('uInkB'),  scratch.inkB[0],  scratch.inkB[1],  scratch.inkB[2]);
