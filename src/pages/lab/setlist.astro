@@ -865,6 +865,24 @@ const buildStamp = readBuildStamp();
       color: var(--text);
       background: color-mix(in srgb, var(--accent) 18%, transparent);
     }
+    /* Lyrics fixes — hand editor + "pick another" candidate list. */
+    .sl-lyrics-edit {
+      width: 100%;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.6;
+      min-height: 14em;
+    }
+    .sl-lyrics-picker:not(:empty) { margin-top: 0.6rem; }
+    .sl-lyrics-preview {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-style: italic;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 0.15rem;
+    }
 
     /* ── Empty & Error ── */
     .sl-empty {

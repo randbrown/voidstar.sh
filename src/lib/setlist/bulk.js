@@ -162,11 +162,11 @@ export async function fetchInfoForAllSongs(onProgress) {
         });
       }
       if (!song.lyrics || !song.syncedLyrics) {
-        const lyr = await fetchLyrics(song.title, song.artist || '', song.durationSec || 0);
+        const lyr = await fetchLyrics(song.title, song.artist || '', song.durationSec || 0, { excludeIds: song.lyricsRejectedIds || [] });
         if (lyr) {
           const hadLyrics = !!song.lyrics;
           applied += applyEmptyFields(song, { lyrics: lyr.plain, syncedLyrics: lyr.synced });
-          if (!hadLyrics && song.lyrics) lyricsFilled++;
+          if (!hadLyrics && song.lyrics) { lyricsFilled++; song.lyricsId = lyr.id; }
         }
       }
       if (applied) {
