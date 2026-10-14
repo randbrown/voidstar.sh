@@ -12,7 +12,7 @@ import { importYoutubePlaylist, applyYoutubeToSong } from './youtube-import.js';
 import { exportSetlistToSpotify } from './spotify-export.js';
 import { collectSetlistTrackUris } from './spotify-export-core.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, findYoutubeForAllSongs, libraryHealth, songHealth } from './bulk.js';
-import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
+import { fetchLyrics, parseSyncedLyrics, searchLyrics, searchLyricsQuery } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore, findLibrarySongMatch } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
@@ -2584,6 +2584,147 @@ function buildPhotoBlock(song) {
   return wrap;
 }
 
+// ── Lyrics fixes (song page) ──
+// Auto-fill takes LRCLIB's best confident match, which can still be the
+// wrong song. These back the lyrics block's verdict controls. Lyrics are
+// external data — candidate text renders via textContent only.
+
+// Remember the current LRCLIB entry as wrong, so neither the picker nor a
+// later "fetch info" / bulk fill offers it again. Capped — it's a short
+// per-song memory, not a log.
+function rejectCurrentLyrics(song) {
+  if (song.lyricsId == null) return;
+  const ids = new Set((song.lyricsRejectedIds || []).map(String));
+  ids.add(String(song.lyricsId));
+  song.lyricsRejectedIds = [...ids].slice(-20);
+}
+
+// Explicit delete: tombstone both fields so the fill-empty backup merge
+// doesn't restore the wrong lyrics from another device's older copy.
+function clearLyrics(song) {
+  if (song.lyrics) store.markCleared(song, 'lyrics');
+  if (song.syncedLyrics) store.markCleared(song, 'syncedLyrics');
+  song.lyrics = '';
+  song.syncedLyrics = '';
+  delete song.lyricsId;
+}
+
+function applyLyricsCandidate(song, c) {
+  rejectCurrentLyrics(song);
+  song.lyrics = c.plain || '';
+  song.syncedLyrics = c.synced || '';
+  if (!song.syncedLyrics) store.markCleared(song, 'syncedLyrics');
+  song.lyricsId = c.id;
+  if (song.lyricsRejectedIds && c.id != null) {
+    song.lyricsRejectedIds = song.lyricsRejectedIds.filter((x) => String(x) !== String(c.id));
+  }
+  delete song.lyricsEdited;
+}
+
+// Inline editor in place of the lyrics box. Saving hand-edited text drops
+// the synced (LRC) copy when the text changed — the timestamps belong to
+// the old words, and synced lines are what the page shows first.
+function renderLyricsEditor(body, song) {
+  body.innerHTML = '';
+  const ta = el('textarea', 'sl-textarea sl-lyrics-edit');
+  ta.rows = 14;
+  ta.placeholder = 'paste or type the lyrics';
+  ta.value = song.lyrics || '';
+  body.appendChild(ta);
+  if (song.syncedLyrics) {
+    body.appendChild(el('div', 'sl-hint', 'changing the text drops the synced timing (it belongs to the old words)'));
+  }
+  const row = el('div', 'sl-steel-summary-actions');
+  row.appendChild(btn('save', 'sl-btn-primary sl-btn-xs', async () => {
+    const next = ta.value.replace(/\s+$/, '');
+    if (next === (song.lyrics || '')) { refresh(); return; }
+    if (!next.trim()) {
+      rejectCurrentLyrics(song);
+      clearLyrics(song);
+    } else {
+      if (song.syncedLyrics) store.markCleared(song, 'syncedLyrics');
+      song.syncedLyrics = '';
+      song.lyrics = next;
+      song.lyricsEdited = true; // hand text — not an LRCLIB entry any more
+    }
+    await store.putSong(song);
+    refresh();
+  }));
+  row.appendChild(btn('cancel', 'sl-btn-ghost sl-btn-xs', () => refresh()));
+  body.appendChild(row);
+  ta.focus();
+}
+
+async function openLyricsPicker(wrap, triggerBtn, song, { rejectCurrent = false } = {}) {
+  const exclude = [...(song.lyricsRejectedIds || [])];
+  if (rejectCurrent && song.lyricsId != null) exclude.push(song.lyricsId);
+  const prevLabel = triggerBtn.textContent;
+  triggerBtn.disabled = true;
+  triggerBtn.textContent = 'searching...';
+  const opts = { durationSec: song.durationSec || 0, excludeIds: exclude };
+  const results = await searchLyrics(song.title, song.artist || '', opts);
+  triggerBtn.textContent = prevLabel;
+  triggerBtn.disabled = false;
+
+  wrap.innerHTML = '';
+  wrap.appendChild(el('div', 'sl-section-title', 'pick the right lyrics'));
+  const form = el('div', 'sl-playlist-add');
+  const q = el('input', 'sl-input');
+  q.type = 'search';
+  q.placeholder = 'search title / artist / album...';
+  q.value = [song.title, song.artist].filter(Boolean).join(' ');
+  const go = btn('search', 'sl-btn-ghost sl-btn-xs', async () => {
+    go.disabled = true;
+    go.textContent = 'searching...';
+    const r = await searchLyricsQuery(q.value, { title: song.title, artist: song.artist || '', ...opts });
+    go.disabled = false;
+    go.textContent = 'search';
+    renderList(r);
+  });
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+  form.appendChild(q);
+  form.appendChild(go);
+  form.appendChild(btn('close', 'sl-btn-ghost sl-btn-xs', () => { wrap.innerHTML = ''; }));
+  wrap.appendChild(form);
+  const list = el('div', 'sl-chart-candidates');
+  wrap.appendChild(list);
+
+  function renderList(items) {
+    list.innerHTML = '';
+    if (!items.length) {
+      list.appendChild(el('div', 'sl-hint', 'no other matches on LRCLIB — try the search box, or paste the lyrics by hand'));
+      return;
+    }
+    for (const c of items) {
+      const row = el('div', 'sl-chart-candidate sl-lyrics-candidate');
+      const info = el('div', 'sl-chart-candidate-info');
+      const name = el('div', 'sl-chart-candidate-name');
+      name.textContent = `${c.trackName}${c.artistName ? ` — ${c.artistName}` : ''}`;
+      info.appendChild(name);
+      const meta = el('div', 'sl-chart-candidate-meta');
+      meta.textContent = [
+        c.albumName,
+        c.durationSec ? formatTimecode(c.durationSec) : '',
+        c.synced ? 'synced' : 'plain',
+      ].filter(Boolean).join(' · ');
+      info.appendChild(meta);
+      // First lines, so the right song is recognizable without opening it.
+      const preview = el('div', 'sl-lyrics-preview');
+      preview.textContent = (c.plain || '').split('\n').filter((l) => l.trim()).slice(0, 2).join(' / ');
+      info.appendChild(preview);
+      row.appendChild(info);
+      row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
+        applyLyricsCandidate(song, c);
+        await store.putSong(song);
+        refresh();
+      }));
+      list.appendChild(row);
+    }
+  }
+  renderList(results);
+  wrap.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
 // YouTube results picker (the "find on YouTube" flow). Each row attaches the
 // video as a listen-link alternate and, fill-empty, its thumbnail as the song
 // photo. Titles/channels come from YouTube — untrusted, so textContent only.
@@ -3587,6 +3728,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         song.title,
         song.artist || meta?.artist || '',
         song.durationSec || meta?.durationSec || 0,
+        { excludeIds: song.lyricsRejectedIds || [] },
       );
       const filled = [];
       const fill = (field, value, label) => {
@@ -3604,6 +3746,9 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (lyr) {
         const hadLyrics = !!song.lyrics;
         fill('lyrics', lyr.plain);
+        // Remember which LRCLIB entry this was, so "wrong — pick another"
+        // can exclude it.
+        if (!hadLyrics && song.lyrics) song.lyricsId = lyr.id;
         if (!song.syncedLyrics && lyr.synced) {
           song.syncedLyrics = lyr.synced;
           // "lyrics" already announces the new-lyrics case; only call out
@@ -4066,10 +4211,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   // start the timer with the track and the active line highlights and
   // scrolls into view inside the lyrics box. Plain lyrics render as-is.
   // Lyrics are external data — textContent only, never innerHTML.
-  if (song.lyrics || song.syncedLyrics) {
+  // Auto-fetched lyrics can be the wrong song (a common title, another
+  // artist), so the verdict controls live on the block: edit/paste by hand,
+  // "wrong — pick another" (LRCLIB candidates minus the rejected one), or
+  // delete. With no lyrics yet the block still shows, offering find / paste.
+  {
     const lyricsSection = el('div', 'sl-section');
     lyricsSection.innerHTML = '<div class="sl-section-title">lyrics</div>';
+    const hasLyrics = !!(song.lyrics || song.syncedLyrics);
     const synced = song.syncedLyrics ? parseSyncedLyrics(song.syncedLyrics) : [];
+    const body = el('div', 'sl-lyrics-body');
     if (synced.length) {
       const wrap = el('div', 'sl-lyrics sl-lyrics-synced');
       const lineEls = synced.map(({ t, text }) => {
@@ -4078,9 +4229,9 @@ export async function renderSongFocus(root, songId, setlistId) {
         wrap.appendChild(line);
         return { t, line };
       });
-      lyricsSection.appendChild(wrap);
+      body.appendChild(wrap);
       if (hasTimecodeTimer) {
-        lyricsSection.appendChild(el('div', 'sl-hint', 'synced — lines follow the timecode timer'));
+        body.appendChild(el('div', 'sl-hint', 'synced — lines follow the timecode timer'));
       }
       let lastActive = -1;
       onTimecodeTick = (sec) => {
@@ -4095,11 +4246,39 @@ export async function renderSongFocus(root, songId, setlistId) {
         }
         lastActive = active;
       };
-    } else {
+    } else if (song.lyrics) {
       const pre = el('pre', 'sl-lyrics');
       pre.textContent = song.lyrics;
-      lyricsSection.appendChild(pre);
+      body.appendChild(pre);
+    } else {
+      body.appendChild(el('div', 'sl-hint', 'no lyrics yet'));
     }
+    lyricsSection.appendChild(body);
+
+    const picker = el('div', 'sl-lyrics-picker');
+    const actions = el('div', 'sl-steel-summary-actions sl-lyrics-actions');
+    actions.appendChild(btn(hasLyrics ? '✎ edit' : '+ paste lyrics', 'sl-btn-ghost sl-btn-xs', () => {
+      picker.innerHTML = '';
+      renderLyricsEditor(body, song);
+    }));
+    const pickB = btn(hasLyrics ? '✗ wrong — pick another' : 'find lyrics', 'sl-btn-ghost sl-btn-xs', async () => {
+      await openLyricsPicker(picker, pickB, song, { rejectCurrent: hasLyrics });
+    });
+    pickB.title = hasLyrics
+      ? 'These lyrics are the wrong song — list other LRCLIB matches (the current one is excluded from future auto-fills)'
+      : 'Search LRCLIB and pick the right lyrics';
+    actions.appendChild(pickB);
+    if (hasLyrics) {
+      actions.appendChild(btn('delete', 'sl-btn-ghost sl-btn-xs', async () => {
+        if (!confirm('Delete these lyrics? The deletion carries to your other devices on the next backup, and "fetch info" won\'t re-apply this match.')) return;
+        rejectCurrentLyrics(song);
+        clearLyrics(song);
+        await store.putSong(song);
+        refresh();
+      }));
+    }
+    lyricsSection.appendChild(actions);
+    lyricsSection.appendChild(picker);
     root.appendChild(lyricsSection);
   }
 

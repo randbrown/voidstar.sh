@@ -26,7 +26,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm` stays in the model (chart-doc headers and "read chart" read/write it) and `capo` only as something **"read chart" finds written on someone else's chart** — generated charts never state a capo and nothing else fills the field. Both have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm` stays in the model (chart-doc headers and "read chart" read/write it) and `capo` only as something **"read chart" finds written on someone else's chart** — generated charts never state a capo and nothing else fills the field. Both have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `lyricsId` (lazy) is the LRCLIB entry the current lyrics came from, `lyricsRejectedIds` (lazy, ≤ 20) the entries marked wrong for this song — auto-fill and the picker skip them — and `lyricsEdited` (lazy) marks hand-edited text; see the fixing-wrong-lyrics section. `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
@@ -240,13 +240,40 @@ overwrites hand-set values) from two sources:
   and CORS-open): plain lyrics into `song.lyrics`, LRC synced lyrics into
   `song.syncedLyrics`. Exact `/api/get` lookup first (title + artist +
   duration), then `/api/search` ranked with the app's own match scoring
-  (≥ 0.7 to accept). Synced-only tracks derive plain text from the LRC.
+  (≥ 0.7 to accept). The score (`scoreLyricsHit`) is title match, +0.15×
+  for an agreeing artist, **−0.35 for a clearly different artist** (so a
+  same-title song by someone else never auto-applies), ±0.05 for duration
+  agreement. Synced-only tracks derive plain text from the LRC.
 
 Lyrics render via `textContent` only (external data). When `syncedLyrics`
 exists, the lyrics section becomes a scrolling box whose active line
 highlights and centers as the **timecode timer** runs (the `onTimecodeTick`
 hook in `renderSongFocus`) — start the timer with the Spotify embed and the
 lyrics follow.
+
+### Fixing wrong lyrics
+
+Auto-fill can still land on the wrong song, so the lyrics block carries
+verdict controls (same idea as the steel-summary block). It always renders,
+so a song without lyrics gets **find lyrics** / **+ paste lyrics** there too.
+
+- **✗ wrong — pick another** — runs `searchLyrics` (LRCLIB `/api/search`
+  by title+artist and by title alone, deduped, ranked by `scoreLyricsHit`)
+  excluding the current `lyricsId` and every `lyricsRejectedIds` entry, and
+  lists candidates with album · length · synced/plain and a two-line
+  preview. A free-text box (`searchLyricsQuery`, LRCLIB `q=`) covers a stored
+  title/artist that is itself off. **use** replaces both `lyrics` and
+  `syncedLyrics` and moves the old id into `lyricsRejectedIds`.
+- **✎ edit** — inline textarea over the plain lyrics. Changing the text
+  drops `syncedLyrics` (tombstoned) since the timestamps belong to the old
+  words and synced lines render first; sets `lyricsEdited`. Saving empty is
+  a delete.
+- **delete** — rejects the current id and tombstones both fields
+  (`markCleared`) so the fill-empty backup merge doesn't restore them.
+
+"fetch info" and the bulk "fetch info & lyrics" pass `lyricsRejectedIds` to
+`fetchLyrics`, so a rejected match is never re-applied — including an exact
+`/api/get` hit. Offline smoke test: `scripts/check-setlist-lyrics.mjs`.
 
 ### "steel summary (AI)" — the steel direction for a song
 
