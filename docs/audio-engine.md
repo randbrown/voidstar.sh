@@ -23,6 +23,8 @@ All paths are under `src/lib/qualia/`.
 
  file player (own ctx): buffer → source → level → limiter → destination
                                          └─► analyser ──► adopted as 'file'
+ app capture (own ctx): getDisplayMedia audio track → analyser ──► adopted as 'app'
+                       (no destination: the captured app is already audible)
  rig (native ctx):  in → GEQ(7-band) → comp → Earth → earth gate → Metal → metal gate
                        → neural amp → EQ → cab IR
                        → HPF → noise gate → ping-pong delay → reverb → PEQ(8-band parametric)
@@ -342,6 +344,40 @@ preservation (formant control is a no-op until the worklet loads).
 quiet mics), octave-error guard, parabolic interpolation for sub-sample accuracy. **Easy win:** it
 allocates a `Float32Array` every call and is called per-frame — hoist the scratch buffer
 (backlog).
+
+---
+
+## app-capture.js — another app's audio as a source
+
+`createAppCapture({ onChange })` lets Spotify, a YouTube tab, or any other app
+drive the visuals. `start()` opens the browser's share picker
+(`getDisplayMedia`, voice processing off, `systemAudio: 'include'`,
+`selfBrowserSurface: 'exclude'`) and keeps only the **audio track**, wired into an
+analyser in a private ctx that page-init adopts as the `'app'` source (a member of
+`'mix'` and `'all'`, like `'file'`; turning it on auto-bumps `off → mix` /
+`mic → all`). It is **never routed to `destination`**: the app is already playing
+through the speakers, so monitoring here would double it. It still lands in the
+recordable mix via the usual analyser tap. Chromium requires a video track, so a
+1 fps / 320 px one is requested and left running unread. The browser's own *Stop
+sharing* bar ends the source (`ended` → `stop()`). UI: the *capture app audio…*
+row in the deck panel.
+
+What works where (the picker decides; a stream with no audio track throws a
+"turn on Share audio" error):
+
+| Browser / OS | Tab audio | System / desktop-app audio |
+|---|---|---|
+| Chrome / Edge, Windows & ChromeOS | yes | yes (*Entire screen* + *Share system audio*) |
+| Chrome / Edge, macOS | yes | only on recent Chrome + macOS 13+; otherwise no |
+| Chrome / Edge, Linux | yes | no (use a PulseAudio/PipeWire monitor as the mic) |
+| Firefox, Safari, any mobile browser | no | no |
+
+So the universal route is the Spotify **web player in another tab**. For a native
+app where the picker offers no system audio, a loopback device (BlackHole /
+Loopback on macOS, VB-Cable on Windows, a Pulse/PipeWire monitor on Linux)
+selected as the ordinary mic input does the same job. The Spotify Web API can't
+help: it exposes no audio stream, and its audio-analysis endpoints are closed to
+new apps.
 
 ---
 
