@@ -1383,7 +1383,7 @@ export function extractFromText(text) {
 }
 
 function parseDriveFilename(name) {
-  let clean = name.replace(/\.(pdf|docx?|txt|gdoc)$/i, '').trim();
+  let clean = name.replace(/\.(pdf|docx?|txt|gdoc|rtf|odt|pages|jpe?g|png|heic|webp|gif|cho|chopro|chordpro|crd)$/i, '').trim();
   clean = clean.replace(/^\d+\.\s*/, '');
   // Split "Title - Artist" only on a dash flanked by whitespace. Requiring the
   // surrounding spaces keeps hyphenated or spelled-out titles intact — e.g.
