@@ -7,7 +7,8 @@ const FEAT = /\s*(feat\.?|ft\.?|featuring)\s+.*/i;
 // forms ("Boot Scootin’ Boogie") while the library usually holds the straight
 // or omitted form, and the mismatch used to knock an otherwise identical title
 // off the exact/normalized rungs and down into fuzzy guessing.
-const PUNCTUATION = /[''‘’""“”.,!?&\-–—:;/\\]/g;
+// Underscores too: Drive filenames are often snake_cased ("I_Will_Always_Love_You.pdf").
+const PUNCTUATION = /[''‘’""“”.,!?&\-–—:;/\\_]/g;
 // Zero-width junk that rides along with copy/paste (BOM, ZWSP/ZWNJ/ZWJ, word
 // joiner) — invisible on screen, but enough to make two identical titles
 // compare unequal.
@@ -205,12 +206,36 @@ export function findLibrarySongMatch(title, artist, songs, { threshold = 0.8 } =
   return null;
 }
 
+// Chart files arrive as docs, PDFs, photos and chord-pro text alike.
+const DRIVE_EXT = /\.(pdf|docx?|txt|gdoc|rtf|odt|pages|jpe?g|png|heic|webp|gif|cho|chopro|chordpro|crd)$/i;
+
+// The " - " tail of a chart filename is often not an artist at all — a key
+// ("Jolene - G", "Jolene - Key of Bb"), or a chart tag ("Jolene - NNS",
+// "Jolene - chart v2"). Treated as an artist it trips the artist-mismatch
+// penalty in findBestMatchWithArtist and sinks a perfect title match.
+const CHART_TAG = /^(?:(?:key(?:\s+of)?\s*)?[a-g][#b♭♯]?(?:m|min|maj)?|.*\b(?:charts?|nns|numbers?|lead\s*sheet|chords?|capo|bpm|draft|final|v\d+|rev\d*|copy)\b.*)$/i;
+
+/**
+ * Matching candidates for one Drive chart file: the filename re-parsed
+ * client-side (so parsing fixes apply without a worker redeploy), with a
+ * key/chart-tag "artist" dropped, plus the swapped reading for files named
+ * "Artist - Title". Every variant carries the file's link + inferred meta.
+ */
+export function driveChartVariants(file) {
+  const parsed = file.name ? parseDriveFilename(file.name) : { title: file.title, artist: file.artist || '' };
+  const title = parsed.title || file.title || '';
+  const artist = CHART_TAG.test((parsed.artist || '').trim()) ? '' : (parsed.artist || '');
+  const out = [{ ...file, title, artist }];
+  if (artist) out.push({ ...file, title: artist, artist: title });
+  return out;
+}
+
 /**
  * Parse a Google Drive filename into title and artist.
  * Handles formats like: "06. Two Dozen Roses - Shenandoah" or "Song Title - Artist.pdf"
  */
 export function parseDriveFilename(name) {
-  let clean = name.replace(/\.(pdf|docx?|txt|gdoc)$/i, '').trim();
+  let clean = name.replace(DRIVE_EXT, '').trim();
   clean = clean.replace(/^\d+\.\s*/, '');
   // Split "Title - Artist" only on a dash flanked by whitespace. Requiring the
   // surrounding spaces keeps hyphenated or spelled-out titles intact — e.g.

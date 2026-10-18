@@ -2855,7 +2855,7 @@ function renderSpotifyPicker(wrap, tracks, song, { heading = 'pick the right tra
 // with it).
 function renderChartCandidates(wrap, candidates, song, { alternate = false } = {}) {
   wrap.innerHTML = '';
-  wrap.appendChild(el('div', 'sl-section-title', alternate ? 'possible alternate charts' : 'possible charts found online'));
+  wrap.appendChild(el('div', 'sl-section-title', alternate ? 'possible alternate charts' : 'possible charts'));
   for (const c of candidates) {
     const row = el('div', 'sl-chart-candidate');
     const info = el('div', 'sl-chart-candidate-info');
@@ -3624,6 +3624,10 @@ export async function renderSongFocus(root, songId, setlistId) {
         if (result.candidates?.length) {
           renderChartCandidates(chartCandidatesWrap, result.candidates, song, { alternate: true });
           restore('pick below');
+        } else if (result.driveErrors?.length) {
+          console.warn('[setlist] alt chart search — drive:', ...result.driveErrors);
+          restore('drive folder unreadable');
+          alert(`Couldn't read your Drive chart folder(s):\n\n${result.driveErrors.join('\n\n')}`);
         } else if (result.providerDown) {
           if (result.warnings?.length) console.warn('[setlist] alt chart search:', ...result.warnings);
           restore('web search blocked — add search key');
@@ -3664,6 +3668,10 @@ export async function renderSongFocus(root, songId, setlistId) {
         } else if (result.candidates?.length) {
           renderChartCandidates(chartCandidatesWrap, result.candidates, song);
           restore('no sure match — pick below');
+        } else if (result.driveErrors?.length) {
+          console.warn('[setlist] chart search — drive:', ...result.driveErrors);
+          restore('drive folder unreadable');
+          alert(`Couldn't read your Drive chart folder(s):\n\n${result.driveErrors.join('\n\n')}`);
         } else if (result.providerDown) {
           if (result.warnings?.length) console.warn('[setlist] chart search:', ...result.warnings);
           restore('web search blocked — add search key');
@@ -4416,10 +4424,9 @@ export async function renderSettings(root) {
   `;
   root.appendChild(workerSection);
 
-  // Google Drive folders — personal (direct children only) and
-  // community/shared (recursive subfolder search) are kept as two separate
-  // lists: they have different trust/perf profiles (a recursive walk of a
-  // shared archive you don't own is slower and worth a distinct warning).
+  // Google Drive folders — personal and community/shared are kept as two
+  // separate lists (different trust profiles: a shared archive you don't own
+  // is worth a distinct warning); both are walked recursively.
   function buildFolderSection(title, hint, sourceKey) {
     const section = el('div', 'sl-section');
     section.innerHTML = `
@@ -4465,7 +4472,7 @@ export async function renderSettings(root) {
 
   root.appendChild(buildFolderSection(
     'personal drive folders',
-    'Your own Google Drive folders. Scanned directly (not their subfolders) — for nested archives, use Community Chart Folders below. Requires the setlist worker to be deployed.',
+    'Your own Google Drive folders, subfolders included (capped at 4 levels deep / 2000 files). The folder must be shared "anyone with the link" — the worker reads Drive with an API key, not your Google login. Requires the setlist worker to be deployed.',
     'driveFolders',
   ));
   root.appendChild(buildFolderSection(

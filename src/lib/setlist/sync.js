@@ -4,7 +4,7 @@
 // falls back to client-side matching with manually provided URLs.
 // Cross-references Spotify and Drive data for better disambiguation.
 
-import { findBestMatch, findBestMatchWithArtist, matchScore, parseDriveFilename } from './match.js';
+import { findBestMatch, findBestMatchWithArtist, matchScore, parseDriveFilename, driveChartVariants } from './match.js';
 import * as store from './store.js';
 import { parseSpotifyUrl } from './spotify.js';
 import { getSpotifyUserToken, isSpotifyConnected } from './spotify-auth.js';
@@ -427,19 +427,9 @@ export async function fetchPlaylistTracks(playlistUrl, opts = {}) {
   return fetchSpotifyTracks(getSources().workerUrl, playlistUrl, opts);
 }
 
-async function fetchDriveFiles(workerUrl, folderUrl) {
-  if (!workerUrl) return [];
-  const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
-  if (!m) return [];
-
-  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}`, { headers: workerHeaders() });
-  if (!res.ok) throw new Error(`Drive API ${res.status}`);
-  return await res.json();
-}
-
-// Community/shared chart-repo folders: recursively walks subfolders via the
-// worker's /recursive route, since archives in circulation among musicians
-// are commonly nested (artist/album/etc). Returns {files, truncated}.
+// Walks a Drive folder AND its subfolders via the worker's /recursive route —
+// personal and community folders alike, since chart archives are commonly
+// nested (artist/album/etc). Returns {files, truncated}.
 async function fetchDriveFilesRecursive(workerUrl, folderUrl) {
   if (!workerUrl) return { files: [], truncated: false };
   const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
@@ -450,27 +440,22 @@ async function fetchDriveFilesRecursive(workerUrl, folderUrl) {
   return await res.json();
 }
 
-// Gathers chart candidates from every configured source: personal Drive
-// folders (direct children only), community/shared folders (recursive), and
-// manually-linked charts. Shared by the bulk sync and the per-song search.
+// Gathers chart candidates from every configured source: personal and
+// community/shared Drive folders (both walked recursively), and manually-
+// linked charts. Shared by the bulk sync and the per-song search.
 async function fetchAllDriveFiles(sources, errors = []) {
   const driveFiles = [];
-  for (const folder of sources.driveFolders) {
-    try {
-      driveFiles.push(...(await fetchDriveFiles(sources.workerUrl, folder.url)));
-    } catch (e) {
-      errors.push(e.message);
-    }
-  }
-  for (const folder of sources.communityFolders) {
+  for (const folder of [...sources.driveFolders, ...sources.communityFolders]) {
     try {
       const { files, truncated } = await fetchDriveFilesRecursive(sources.workerUrl, folder.url);
       driveFiles.push(...files);
       if (truncated) {
-        errors.push(`Community folder scan was truncated (too many files/subfolders) — some charts may be missing: ${folder.url}`);
+        errors.push(`Drive folder scan was truncated (too many files/subfolders) — some charts may be missing: ${folder.url}`);
       }
     } catch (e) {
-      errors.push(e.message);
+      // A 404/403 here almost always means the folder isn't link-shared: the
+      // worker reads Drive with an API key, not your Google login.
+      errors.push(`${e.message} reading ${folder.url} — is the folder shared "anyone with the link"?`);
     }
   }
   for (const chart of sources.driveCharts) {
@@ -484,9 +469,10 @@ async function fetchAllDriveFiles(sources, errors = []) {
 function applyDriveMatchToSong(song, driveFiles) {
   if (song.chartUrl || !driveFiles.length) return false;
   const knownArtist = song.artist || '';
+  const variants = driveFiles.flatMap(driveChartVariants);
   const result = knownArtist
-    ? findBestMatchWithArtist(song.title, knownArtist, driveFiles)
-    : findBestMatch(song.title, driveFiles);
+    ? findBestMatchWithArtist(song.title, knownArtist, variants)
+    : findBestMatch(song.title, variants);
   if (!result) return false;
   song.chartUrl = result.match.webViewLink;
   if (result.match.artist && !song.artist) song.artist = result.match.artist;
@@ -527,17 +513,23 @@ export async function searchChartForSong(song, onStage, { collectOnly = false } 
   if (!sources.workerUrl) return { found: false, candidates: [] };
 
   onStage?.('drive');
-  const driveFiles = await fetchAllDriveFiles(sources);
-  let driveCandidates = [];
-  if (collectOnly) {
-    driveCandidates = driveFiles
-      .map(f => ({ name: f.title, url: f.webViewLink, source: 'drive', verified: true, score: matchScore(song.title, f.title) }))
-      .filter(c => c.url && c.score >= 0.5)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
-  } else if (applyDriveMatchToSong(song, driveFiles)) {
+  const driveErrors = [];
+  const driveFiles = await fetchAllDriveFiles(sources, driveErrors);
+  if (!collectOnly && applyDriveMatchToSong(song, driveFiles)) {
     return { found: true, tier: 'drive' };
   }
+  // Drive near-misses go to the picker rather than vanishing — a file named
+  // oddly enough to miss the auto-link bar is still the user's own chart.
+  const driveCandidates = driveFiles
+    .map(f => {
+      const [best, score] = driveChartVariants(f)
+        .map(v => [v, matchScore(song.title, v.title)])
+        .reduce((a, b) => (b[1] > a[1] ? b : a));
+      return { ...best, name: f.name || f.title, url: f.webViewLink, source: 'drive', verified: true, score };
+    })
+    .filter(c => c.url && c.score >= 0.5)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
 
   onStage?.('web');
   let data = null;
@@ -560,6 +552,7 @@ export async function searchChartForSong(song, onStage, { collectOnly = false } 
     candidates: [...driveCandidates, ...candidates],
     providerDown: !!data?.providerDown,
     warnings: data?.warnings || [],
+    driveErrors,
   };
 }
 

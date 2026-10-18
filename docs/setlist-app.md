@@ -981,8 +981,17 @@ the worker asks for 1).
 When a song has no chart linked yet, `renderSongFocus()` in `views.js` offers
 four tiers, in order:
 
-1. **Personal Drive folders** — `sources.driveFolders`, direct children only,
-   via the worker's `GET /drive/folder/:id`.
+1. **Personal Drive folders** — `sources.driveFolders`, walked
+   **recursively** via the worker's `GET /drive/folder/:id/recursive` (same
+   walk and caps as tier 2). The worker reads Drive with `GOOGLE_API_KEY`,
+   so the folder must be link-shared ("anyone with the link"); an unreadable
+   folder surfaces as an alert on "search for chart" instead of a silent
+   "no match found".
+   Both Drive tiers match via `driveChartVariants()` (`match.js`): the
+   filename is re-parsed client-side, a key/chart-tag tail ("Jolene - G",
+   "Jolene - NNS") is not treated as an artist, and "Artist - Title" names
+   are tried swapped. Near-misses (score ≥ 0.5) land in the picker rather
+   than vanishing.
 2. **Community/shared chart folders** — `sources.communityFolders`, walked
    **recursively** via `GET /drive/folder/:id/recursive`, since archives in
    circulation among musicians (e.g. Nashville Number Chart repos) are
