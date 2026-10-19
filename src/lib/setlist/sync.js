@@ -114,6 +114,7 @@ const CROSS_PLAYLIST_MIN_SCORE = 0.95;
 // `refs` is buildServiceRefs' shape: {service → {perSong, all}}.
 async function runSync(songs, refs, onProgress) {
   const sources = getSources();
+  driveWalkCache.clear(); // an explicit sync should see charts added a minute ago
   const results = { total: songs.length, done: 0, drive: { matched: 0, skipped: 0, errors: [] } };
   for (const svc of MEDIA_SERVICES) results[svc.key] = { matched: 0, skipped: 0, errors: [] };
 
@@ -429,28 +430,74 @@ export async function fetchPlaylistTracks(playlistUrl, opts = {}) {
 
 // Walks a Drive folder AND its subfolders via the worker's /recursive route —
 // personal and community folders alike, since chart archives are commonly
-// nested (artist/album/etc). Returns {files, truncated}.
+// nested (artist/album/etc). The worker reads a bounded slice per request and
+// returns a `cursor` for the rest; this follows it (POSTing it back) until the
+// walk is done. Returns {files, truncated}. A pre-cursor worker answers a
+// single GET with no `cursor` field, which degrades to the old one-shot read.
+const DRIVE_WALK_MAX_REQUESTS = 25;
+const DRIVE_WALK_CACHE_MS = 5 * 60_000;
+const driveWalkCache = new Map(); // `${workerUrl}|${folderId}` → {at, result}
+
 async function fetchDriveFilesRecursive(workerUrl, folderUrl) {
   if (!workerUrl) return { files: [], truncated: false };
   const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (!m) return { files: [], truncated: false };
 
-  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}/recursive`, { headers: workerHeaders() });
-  if (!res.ok) throw new Error(`Drive API ${res.status}`);
-  return await res.json();
+  // Per-song "search for chart" runs this on every click — reuse a recent
+  // walk instead of re-listing a big library each time.
+  const cacheKey = `${workerUrl}|${m[1]}`;
+  const hit = driveWalkCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < DRIVE_WALK_CACHE_MS) return hit.result;
+
+  const endpoint = `${workerUrl}/drive/folder/${m[1]}/recursive`;
+  const files = [];
+  let cursor = null;
+  let truncated = false;
+  let stalls = 0;
+  for (let i = 0; i < DRIVE_WALK_MAX_REQUESTS; i++) {
+    const res = cursor
+      ? await fetch(endpoint, { method: 'POST', headers: workerHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ cursor }) })
+      : await fetch(endpoint, { headers: workerHeaders() });
+    if (!res.ok) {
+      if (!files.length) throw new Error(`Drive API ${res.status}`);
+      truncated = true; // keep what we already have
+      cursor = null;
+      break;
+    }
+    const data = await res.json();
+    files.push(...(data.files || []));
+    if (!('cursor' in data)) { truncated = !!data.truncated; break; } // pre-cursor worker
+    if (data.depthCapped) truncated = true;
+    // A request that read nothing (Drive quota hiccup) hands back the same
+    // cursor — give it a moment, but don't spin on it.
+    const next = data.cursor || null;
+    if (next && !data.files?.length && JSON.stringify(next) === JSON.stringify(cursor)) {
+      if (++stalls > 2) break;
+      await new Promise(r => setTimeout(r, 1000 * stalls));
+    }
+    cursor = next;
+    if (!cursor) break;
+  }
+  if (cursor) truncated = true;
+
+  const result = { files, truncated };
+  driveWalkCache.set(cacheKey, { at: Date.now(), result });
+  return result;
 }
 
 // Gathers chart candidates from every configured source: personal and
 // community/shared Drive folders (both walked recursively), and manually-
 // linked charts. Shared by the bulk sync and the per-song search.
-async function fetchAllDriveFiles(sources, errors = []) {
+// `warnings` collects partial-scan notices (the folder WAS read); `errors`
+// only failures to read one at all. They default to the same list.
+async function fetchAllDriveFiles(sources, errors = [], warnings = errors) {
   const driveFiles = [];
   for (const folder of [...sources.driveFolders, ...sources.communityFolders]) {
     try {
       const { files, truncated } = await fetchDriveFilesRecursive(sources.workerUrl, folder.url);
       driveFiles.push(...files);
       if (truncated) {
-        errors.push(`Drive folder scan was truncated (too many files/subfolders) — some charts may be missing: ${folder.url}`);
+        warnings.push(`Drive folder scan was only partial (very large or very deeply nested) — some charts may be missing: ${folder.url}`);
       }
     } catch (e) {
       // A 404/403 here almost always means the folder isn't link-shared: the
@@ -514,7 +561,10 @@ export async function searchChartForSong(song, onStage, { collectOnly = false } 
 
   onStage?.('drive');
   const driveErrors = [];
-  const driveFiles = await fetchAllDriveFiles(sources, driveErrors);
+  const driveWarnings = [];
+  const driveFiles = await fetchAllDriveFiles(sources, driveErrors, driveWarnings);
+  // A partial scan still found charts — note it, but it isn't "unreadable".
+  if (driveWarnings.length) console.warn('[setlist] chart search — drive:', ...driveWarnings);
   if (!collectOnly && applyDriveMatchToSong(song, driveFiles)) {
     return { found: true, tier: 'drive' };
   }
