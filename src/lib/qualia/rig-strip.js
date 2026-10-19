@@ -3,9 +3,16 @@
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
 // need it). Fixed-order series chain, laid out like a physical pedalboard:
 //
-//   in → GEQ(7-band) → comp → earth → earth gate → metal → metal gate → amp
-//      → EQ(lo/mid/hi) → cab → HPF → gate → delay (p-pong) → reverb (conv.)
-//      → PEQ(8-band) → pan → out
+//   in → GEQ(7-band) → comp → earth → earth gate → metal → metal gate
+//      → spring (conv., pre-amp) → amp → EQ(lo/mid/hi) → cab → HPF → gate
+//      → delay (p-pong) → reverb (conv.) → PEQ(8-band) → pan → out
+//
+// Two reverbs, two jobs. `spring` sits in FRONT of the amp, where a Twin's own
+// tank lives (its return mixes back in ahead of the power section), so the
+// spring wash goes through the capture's compression and the cab IR like the
+// real thing — a synthesized dispersive two-spring tank (spring-reverb.js),
+// mono like the pan, with a dwell drive. `reverb` stays post-cab as the
+// studio/ambient room: long, clean, stereo, never smeared by the amp.
 //
 // Three independent noise gates share one sidechain (see the gate section):
 // per-pedal gates immediately after Earth and after Metal, plus the strip gate
@@ -49,6 +56,8 @@
 // owns the persisted config and re-applies it via setConfig().
 
 import { loadNamWasm } from './nam-wasm.js';
+import { buildSpringIR, SPRING_DECAY_MIN, SPRING_DECAY_MAX } from './spring-reverb.js';
+import { calTrimFor, CAL_DEFAULT_INTERFACE_DBU } from './neural-amp-model.js';
 
 // ── Graphic EQ (geq) — Boss GE-7 voicing ─────────────────────────────────
 // Seven octave-spaced peaking bands (100 Hz…6.4 kHz, ±15 dB) + an overall
@@ -114,11 +123,20 @@ export const STRIP_DEFAULTS = {   // listed in chain order
   // so the noise floor is far higher: a higher threshold and a fast release,
   // which is also what the genre wants (tight, chugging cutoff).
   metalGate: { on: false, thresh: 0.28, release: 0.18 },
+  // Pre-amp spring tank. `dwell` drives the spring's input (a Fender reverb
+  // driver is a tube run hot, so hard picking splashes), `decay` is the tank's
+  // low-mid RT60, `tone` the return's low-pass, `mix` the reverb knob.
+  spring: { on: false, dwell: 0.5, decay: 2.5, tone: 0.6, mix: 0.3 },
+  // `cal` matches the capture's input level to the interface (NAM
+  // `input_level_dbu` vs the rig's interface setting), so a capture is hit as
+  // hard as its creator hit the real amp. ON by default: it's what makes a
+  // clean capture actually play clean. Captures that declare no input level
+  // are left alone either way.
   // `norm` level-matches captures using the loudness the capture declares (see
   // neural-amp-model.js). Off by default: it's a real gain change, and the
   // performer owns level. `level` alone can't do this job — it caps at 2x
   // (+6 dB) and captures differ by more than that.
-  amp:    { on: false, gain: 1, mix: 1, level: 1, norm: false },
+  amp:    { on: false, gain: 1, mix: 1, level: 1, norm: false, cal: true },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
   hpf:    { on: false, freq: 80 },
@@ -299,7 +317,7 @@ function deepMerge(base, over) {
   return out;
 }
 
-export function createRigStrip(ctx, cfg) {
+export function createRigStrip(ctx, cfg, opts = {}) {
   const state = deepMerge(STRIP_DEFAULTS, cfg);
   // deepMerge is shallow per-stage — re-materialize the peq band array so the
   // strip never aliases (or mutates) STRIP_DEFAULTS or the caller's config.
@@ -401,6 +419,21 @@ export function createRigStrip(ctx, cfg) {
     a.smoothingTimeConstant = 0.8;    // ReaEQ-ish easing on the display
   }
 
+  // Spring tank — a dry + wet insert in front of the amp. Wet path: dwell gain
+  // → soft clip (the driver tube) → mono convolver (synthesized two-spring IR)
+  // → tone LPF → return level. The dry leg stays unity, so bypass is exactly
+  // the input, and the convolver's direct head means the DRY path gains no
+  // latency (the wet path's own oversampling only pre-delays the wash).
+  const springIn    = ctx.createGain();
+  const springDry   = ctx.createGain();
+  const springDwell = ctx.createGain();
+  const springDrive = ctx.createWaveShaper();
+  const springConv  = ctx.createConvolver();
+  springConv.channelCount = 1; springConv.channelCountMode = 'explicit';   // the pan is mono
+  const springTone  = ctx.createBiquadFilter(); springTone.type = 'lowpass'; springTone.Q.value = 0.6;
+  const springWet   = ctx.createGain();
+  const springSum   = ctx.createGain();
+
   // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
   // after the drives (transparent until a model is loaded; never blocks the
   // graph if the worklet isn't available). amp → eq → cab is the natural order.
@@ -414,6 +447,9 @@ export function createRigStrip(ctx, cfg) {
   let neural = null, ampLoaded = false;
   let ampNormTrim = 1;                 // linear gain from the loaded capture's
                                        // declared loudness; 1 when it declares none
+  let ampInputDbu = null;              // the capture's declared input level (dBu
+                                       // at 0 dBFS); null when it declares none
+  let interfaceDbu = Number.isFinite(opts.interfaceDbu) ? opts.interfaceDbu : CAL_DEFAULT_INTERFACE_DBU;
   try {
     neural = new AudioWorkletNode(ctx, 'neural-amp', {
       numberOfInputs: 1, numberOfOutputs: 1,
@@ -481,9 +517,18 @@ export function createRigStrip(ctx, cfg) {
   mLow.connect(mMid);
   mMid.connect(mHigh);
   mHigh.connect(metalPost);
-  // Metal's gate VCA closes out the drive block, before the amp.
+  // Metal's gate VCA closes out the drive block, then the spring tank feeds
+  // the amp — the drives hit the spring (as on a real board into a Twin).
   metalPost.connect(metalGate.vca);
-  metalGate.vca.connect(ampIn);
+  metalGate.vca.connect(springIn);
+  springIn.connect(springDry); springDry.connect(springSum);
+  springIn.connect(springDwell);
+  springDwell.connect(springDrive);
+  springDrive.connect(springConv);
+  springConv.connect(springTone);
+  springTone.connect(springWet);
+  springWet.connect(springSum);
+  springSum.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
   // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
   // crossfades cleanly and bypass is exactly the input.
@@ -532,6 +577,7 @@ export function createRigStrip(ctx, cfg) {
 
   delayDry.gain.value = 1;
   reverbDry.gain.value = 1;
+  springDry.gain.value = 1;
 
   // ── IR generation (debounced rebuild when decay changes) ──
   let irDecay = -1;
@@ -551,6 +597,54 @@ export function createRigStrip(ctx, cfg) {
     }
     try { convolver.buffer = ir; } catch {}
   }
+
+  // Spring IR — synthesized (spring-reverb.js), ~0.1–0.2 s of main-thread
+  // math per build, so decay drags are debounced and recent tanks are cached
+  // (decay steps by 0.1 s, so a knob sweep revisits the same few buffers).
+  // The audio thread never waits: the old tank keeps ringing until the new
+  // one is swapped in.
+  const springCache = new Map();   // decay (0.1 s steps) -> AudioBuffer
+  let springDecay = -1, springTimer = 0, springIdleTimer = 0;
+  function springBufferFor(d) {
+    let buf = springCache.get(d);
+    if (!buf) {
+      const data = buildSpringIR(ctx.sampleRate, d);
+      buf = ctx.createBuffer(1, data.length, ctx.sampleRate);
+      buf.getChannelData(0).set(data);
+      springCache.set(d, buf);
+      if (springCache.size > 6) springCache.delete(springCache.keys().next().value);
+    }
+    return buf;
+  }
+  function buildSpring(decay) {
+    const d = Math.round(clamp(decay, SPRING_DECAY_MIN, SPRING_DECAY_MAX) * 10) / 10;
+    if (d === springDecay) return;
+    clearTimeout(springTimer);
+    const swap = () => {
+      springDecay = d;
+      try { springConv.buffer = springBufferFor(d); } catch {}
+    };
+    // An empty tank (first engage) or a cached one goes straight in; a fresh
+    // build during a knob drag waits for the knob to settle.
+    if (springConv.buffer == null || springCache.has(d)) swap();
+    else springTimer = setTimeout(swap, 150);
+  }
+  // Dwell → driver: up to +24 dB into a tanh soft clip (one fixed curve; the
+  // dwell gain does the driving), with partial makeup (pre^-0.75) so more dwell
+  // is more splash and somewhat more level, as on the real amp — a few dB of
+  // return level across the whole knob (≈4 dB measured; the soft clip eats
+  // the rest at high dwell) rather than 24.
+  // SPRING_RETURN sets the wet level: the ConvolverNode's own normalisation is
+  // hot, so this trims it to sit like a Twin's reverb knob. Measured on a
+  // sustained −26 dBFS tone in the real graph: default settings (mix 0.3,
+  // dwell 0.5, decay 2.5) put the wet ~12 dB under the dry; mix 1 brings it
+  // to ~−1.5 dB. Shorter tanks store less energy, so they sit lower.
+  const SPRING_RETURN = 0.135;
+  springDrive.curve = (() => {
+    const n = 2048, c = new Float32Array(n), k = Math.tanh(1.5);
+    for (let i = 0; i < n; i++) c[i] = Math.tanh(((i / (n - 1)) * 2 - 1) * 1.5) / k;
+    return c;
+  })();
 
   // ── per-stage apply (bypass = neutral) ──
   // Oversample only while a drive is ON (its resamplers add real group delay —
@@ -701,6 +795,33 @@ export function createRigStrip(ctx, cfg) {
     delayFb.gain.value = on ? clamp(state.delay.feedback, 0, 0.95) : 0;
     delayWet.gain.value = on ? clamp(state.delay.mix, 0, 1) : 0;
   }
+  // A bypassed convolver still convolves (at zero wet gain) — a multi-second
+  // IR is real CPU for nothing, so the buffer is dropped shortly after bypass
+  // (once the wet fade is done, so the tail fades instead of being cut) and
+  // re-installed from the cache on engage.
+  function applySpring() {
+    const d = state.spring;
+    const t = ctx.currentTime;
+    setOversample(springDrive, d.on ? '2x' : 'none');
+    clearTimeout(springIdleTimer);
+    if (!d.on) {
+      springWet.gain.setTargetAtTime(0, t, 0.01);
+      clearTimeout(springTimer);
+      springIdleTimer = setTimeout(() => {
+        if (state.spring.on) return;
+        try { springConv.buffer = null; } catch {}
+        springDecay = -1;
+      }, 300);
+      return;
+    }
+    // Built lazily on first engage — a rig that never uses the spring never
+    // pays for the FFT.
+    buildSpring(d.decay);
+    const pre = Math.pow(10, (clamp(d.dwell, 0, 1) * 24) / 20);   // 0 … +24 dB into the driver
+    springDwell.gain.setTargetAtTime(pre, t, 0.01);
+    springTone.frequency.setTargetAtTime(1500 * Math.pow(2, clamp(d.tone, 0, 1) * 2), t, 0.01);  // 1.5k…6k
+    springWet.gain.setTargetAtTime(SPRING_RETURN * clamp(d.mix, 0, 1) / Math.pow(pre, 0.75), t, 0.01);
+  }
   function applyReverb() {
     buildIR(state.reverb.decay);
     reverbWet.gain.value = state.reverb.on ? clamp(state.reverb.mix, 0, 1) : 0;
@@ -712,7 +833,11 @@ export function createRigStrip(ctx, cfg) {
     // The normalisation trim rides with the CAPTURE, not the strip, so swapping
     // captures level-matches on its own and `level` stays the performer's knob.
     const norm = state.amp.norm ? ampNormTrim : 1;
-    ampDrive.gain.value = clamp(state.amp.gain, 0, 4);   // input drive into the model
+    // Input calibration rides with the capture too: it scales only what goes
+    // INTO the model (how hard it's hit), never the dry blend; `gain` stays the
+    // performer's relative drive on top of it.
+    const cal = (state.amp.cal !== false && ampInputDbu != null) ? calTrimFor(ampInputDbu, interfaceDbu) : 1;
+    ampDrive.gain.value = clamp(state.amp.gain, 0, 4) * cal;   // input drive into the model
     ampDry.gain.value = active ? (1 - mix) : 1;
     ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) * norm : 0;
   }
@@ -737,8 +862,9 @@ export function createRigStrip(ctx, cfg) {
     if (!neural) return false;
     const seq = ++ampLoadSeq;
     ampAck = null;
-    if (!model) { ampLoaded = false; ampNormTrim = 1; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
+    if (!model) { ampLoaded = false; ampNormTrim = 1; ampInputDbu = null; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
     ampNormTrim = Number.isFinite(model.normTrim) && model.normTrim > 0 ? model.normTrim : 1;
+    ampInputDbu = Number.isFinite(model.inputLevelDbu) ? model.inputLevelDbu : null;
     let wasm = null;
     if (model.type === 'wavenet') {
       try {
@@ -779,15 +905,23 @@ export function createRigStrip(ctx, cfg) {
     try { cabConv.buffer = cabBuf; } catch {}
     applyCab();
   }
+  // The interface's instrument-input level (dBu at 0 dBFS) — a property of the
+  // hardware, not of a tone or a qualem, so it's set from outside the config.
+  function setInterfaceLevel(dbu) {
+    const v = Number(dbu);
+    if (!Number.isFinite(v)) return;
+    interfaceDbu = Math.max(-20, Math.min(30, v));
+    applyAmp();
+  }
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
   // applyEarth/applyMetal each re-run their own pedal gate.
-  function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyGate(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
+  function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applySpring(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyGate(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
 
   const APPLY = { hpf: applyHpf, gate: applyGate, earth: applyEarth, metal: applyMetal,
     earthGate: applyEarthGate, metalGate: applyMetalGate,
-    comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+    comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, spring: applySpring, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -834,6 +968,7 @@ export function createRigStrip(ctx, cfg) {
                      earthPre, earthShaper, earthTone, earthPost,
                      metalPre, metalShaper1, metalStage, metalShaper2,
                      mLow, mMid, mHigh, metalPost,
+                     springIn, springDry, springDwell, springDrive, springConv, springTone, springWet, springSum,
                      ampIn, ampDrive, ampDry, ampWet, ampSum,
                      eqLow, eqMid, eqHigh,
                      cabIn, cabConv, cabDry, cabWet, cabSum, hpf,
@@ -848,11 +983,12 @@ export function createRigStrip(ctx, cfg) {
     // Tell the neural-amp worklet to end its processor (returns false) so its
     // weight buffers GC instead of running for the AudioContext's lifetime —
     // the strip is rebuilt on every capture reopen.
+    clearTimeout(springTimer); clearTimeout(springIdleTimer);
     try { neural?.port?.postMessage({ cmd: 'dispose' }); } catch {}
     try { neural?.disconnect(); } catch {}
   }
 
   function getPeqAnalysers() { return { pre: peqPreTap, post: peqPostTap }; }
 
-  return { input, output, setParam, setEnabled, setConfig, getConfig, getLatencySeconds, getPeqAnalysers, setCabBuffer, setAmpModel, dispose };
+  return { input, output, setParam, setEnabled, setConfig, getConfig, getLatencySeconds, getPeqAnalysers, setCabBuffer, setAmpModel, setInterfaceLevel, dispose };
 }

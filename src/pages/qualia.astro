@@ -4866,7 +4866,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buf</button>
-      <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
+      <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, spring → amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
       <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack). Pop a layer with ' · re-freeze top with \\ · clear the stack with ⌫ · settings under the ▾. Layers auto-level (constant-RMS bus + limiter).">frz</button>
       <button class="ctrl-btn rig-collapse" id="btn-rig-freeze-cfg" title="Freeze settings + stack controls — level, grain, release, pop / re-frz / clear">▸</button>
@@ -4959,9 +4959,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </section>
   <section id="rig-space" class="rig-subpanel" data-zone="space" style="display:none">
     <div class="rig-subhead">
-      <button class="ctrl-btn rig-collapse" id="btn-rig-space-collapse" title="Collapse / expand the time effects — delay feeds reverb, so the echoes share the room">▾</button>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-space-collapse" title="Collapse / expand the reverbs + delay — spring sits in front of the amp (a Twin's own tank); delay feeds the post-cab reverb, so the echoes share the room">▾</button>
       <span class="sp-subtitle">space</span>
-      <span class="rig-util-hint">delay · reverb</span>
+      <span class="rig-util-hint">spring · delay · reverb</span>
       <span class="rig-head-toggles" id="rig-space-toggles"></span>
     </div>
     <div id="rig-space-body" class="rig-zone-body"></div>
@@ -4982,6 +4982,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div class="rig-ctl">
           <span class="rig-ctl-label">chan</span>
           <button class="ctrl-btn" id="btn-rig-channels" title="Input channels: mono (sum to centre, then full stereo treatment) · stereo (pass L/R) · ch 1 / ch 2 (one input of a stereo interface — e.g. rig on input 1 while the vox mic takes input 2)">mono</button>
+        </div>
+        <div class="rig-ctl" title="Interface level: the dBu that reads 0 dBFS on your instrument input (the interface spec sheet's maximum instrument-input level — e.g. +12 for many Focusrite Scarletts). Calibrated NAM captures (amp → cal) are scaled against it so they're hit as hard as their creator hit the real amp.">
+          <span class="rig-ctl-label">lvl</span>
+          <input type="number" id="rig-iface-dbu" class="seq-num seq-num-wide" min="-20" max="30" step="0.5" value="12" aria-label="Interface input level in dBu at 0 dBFS" />
+          <span class="rig-ctl-label">dBu</span>
         </div>
       </div>
     </div>

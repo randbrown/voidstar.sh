@@ -43,6 +43,34 @@ export function normTrimFor(loudnessDb) {
   return Math.pow(10, db / 20);
 }
 
+// ── input calibration ───────────────────────────────────────────────────────
+// A NAM capture learns how the gear reacts to the exact level it was fed in
+// training, but every interface digitises a guitar at its own level: the same
+// pickup lands several dB hotter or cooler in dBFS depending on the input's
+// clip point. Calibrated captures record that level as `input_level_dbu` (the
+// dBu that hit 0 dBFS when the sweep was played into the gear); the rig knows
+// the interface's own clip point, so the gain that makes your playing hit the
+// model as hard as the creator hit the real amp is simply
+//     interface dBu − capture dBu
+// (the same correction the NAM plugin applies with "calibrate input"). For a
+// steel guitar's hot pickups into a clean Twin, this is the difference between
+// glassy headroom and a capture that breaks up early. Captures that declare no
+// input level get exactly 1 — never a guess.
+export const CAL_DEFAULT_INTERFACE_DBU = 12;   // NAM plugin's default; a typical
+                                               // instrument input's clip point
+export const CAL_MAX_DB = 24;                  // sanity bound on the correction
+
+/** Linear gain into the model for a capture's declared input level. */
+export function calTrimFor(inputLevelDbu, interfaceDbu = CAL_DEFAULT_INTERFACE_DBU) {
+  if (!Number.isFinite(inputLevelDbu) || !Number.isFinite(interfaceDbu)) return 1;
+  const db = Math.max(-CAL_MAX_DB, Math.min(CAL_MAX_DB, interfaceDbu - inputLevelDbu));
+  return Math.pow(10, db / 20);
+}
+function inputLevelOf(model) {
+  const v = model?.metadata?.input_level_dbu;
+  return Number.isFinite(v) ? +v : (typeof v === 'string' && v.trim() && Number.isFinite(+v) ? +v : null);
+}
+
 // ── capture gear type ───────────────────────────────────────────────────────
 // NAM metadata can declare WHAT was captured (`gear_type`: amp · pedal ·
 // pedal_amp · amp_cab · amp_pedal_cab · preamp · studio). The rig uses it to
@@ -87,6 +115,7 @@ export function parseAmpModel(json) {
       if (parsed.ok) {
         parsed.normTrim = normTrimFor(parsed.loudnessDb);
         parsed.gearType = gearTypeOf(model);
+        parsed.inputLevelDbu = inputLevelOf(model);
       }
       return parsed;
     }
@@ -96,6 +125,7 @@ export function parseAmpModel(json) {
         parsed.loudnessDb = Number.isFinite(model?.metadata?.loudness) ? +model.metadata.loudness : null;
         parsed.normTrim = normTrimFor(parsed.loudnessDb);
         parsed.gearType = gearTypeOf(model);
+        parsed.inputLevelDbu = inputLevelOf(model);
       }
       return parsed;
     }

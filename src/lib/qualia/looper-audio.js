@@ -145,6 +145,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
   let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
+  let _interfaceDbu = null;   // interface input level for capture calibration (null = strip default)
 
   // ── recording state ──
   let recording = false;
@@ -393,7 +394,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // monitor + the mix carry the PROCESSED signal. The RECORDER taps the strip's
     // OUTPUT (post-fx, see recTap below) so loops bake in the effects that were on
     // at record time; the scope + tuner stay PRE-strip for a clean signal.
-    strip = createRigStrip(ctx, _stripConfig);
+    strip = createRigStrip(ctx, _stripConfig, { interfaceDbu: _interfaceDbu ?? undefined });
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
     if (_ampModel) strip.setAmpModel(_ampModel).catch((e) => console.warn('[qualia] amp reload failed:', e));
     inputNode.connect(strip.input);
@@ -1722,6 +1723,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setAmpModel: (model) => { _ampModel = model || null; return strip ? strip.setAmpModel(_ampModel) : Promise.resolve(false); },
     clearAmp: () => { _ampModel = null; return strip ? strip.setAmpModel(null).catch(() => false) : Promise.resolve(false); },
     hasAmp: () => !!_ampModel,
+    // Interface instrument-input level (dBu at 0 dBFS) for NAM input
+    // calibration — hardware, so it's held here across strip rebuilds rather
+    // than in the strip config (which travels with tones and qualems).
+    setInterfaceLevel: (dbu) => { _interfaceDbu = Number(dbu); strip?.setInterfaceLevel?.(_interfaceDbu); },
     isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
     // Context rate, for flagging a capture trained at a different one.
     getSampleRate: () => ctx?.sampleRate || 0,

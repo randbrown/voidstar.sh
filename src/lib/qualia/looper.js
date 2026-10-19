@@ -27,7 +27,7 @@
 
 import { createLooperAudio } from './looper-audio.js';
 import { STRIP_DEFAULTS, stageLatencySeconds, PEQ_BAND_COUNT, PEQ_TYPES, defaultPeqBands, sanitizePeqBands } from './rig-strip.js';
-import { parseAmpModel, isFullRigGearType } from './neural-amp-model.js';
+import { parseAmpModel, isFullRigGearType, calTrimFor, CAL_DEFAULT_INTERFACE_DBU } from './neural-amp-model.js';
 import { loadTones, getToneById, getToneByName, addTone, updateTone, removeTone,
          downloadTone, importToneFile } from './tone-presets.js';
 import { createLooperRenderer } from './looper-render.js';
@@ -56,6 +56,7 @@ const RIG_MUTE_KEY   = `${NS}.rigMuted`;  // rig master mute (signal + loops)
 const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (signal + loops)
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo' | 'left' | 'right'
+const IFACEDBU_KEY   = `${NS}.interfaceDbu`; // interface instrument-input level (dBu @ 0 dBFS) for NAM input calibration
 // Input channel modes, in click-cycle order. 'left'/'right' take one channel
 // of a stereo interface (labelled ch 1 / ch 2) so a 2-input device can split
 // between subsystems — rig on input 1, vox mic on input 2.
@@ -112,7 +113,7 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // `group`/`cluster` control only UI placement (the audio graph order is fixed
 // in rig-strip.js):
 //   'main' → the zone section named by `cluster` — drive (earth · metal) ·
-//            tone (amp · eq · cab) · space (delay · reverb)
+//            tone (amp · eq · cab) · space (spring · delay · reverb)
 //   'util' → the "utility" section (geq · comp · hpf · gate · peq · pan), out
 //            of the way until needed
 //   'sub'  → not a board of its own: rendered INSIDE the box named by
@@ -158,6 +159,15 @@ const STRIP_SCHEMA = [
   { id: 'metalGate', name: 'gate', chip: 'm·gate', group: 'sub', parent: 'metal', toggle: true, params: [
     { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
     { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
+  ] },
+  // spring — the pre-amp tank (a Twin's own reverb sits in front of its power
+  // section). Audio position is between the drives and the amp; on screen it
+  // leads the space zone, beside the other time fx. See rig-strip.js.
+  { id: 'spring', name: 'spring', group: 'main', cluster: 'space', toggle: true, params: [
+    { id: 'dwell', label: 'dwl', min: 0, max: 1, step: 0.01 },
+    { id: 'decay', label: 'dec', min: 0.5, max: 5, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` },
+    { id: 'tone',  label: 'tone', min: 0, max: 1, step: 0.01 },
+    { id: 'mix',   label: 'mix', min: 0, max: 1, step: 0.01 },
   ] },
   { id: 'amp',    name: 'amp',    group: 'main', cluster: 'tone', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'eq',     name: 'eq',     group: 'main', cluster: 'tone', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
@@ -345,6 +355,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const signalStat  = document.getElementById('rig-signal-status');
   const sigStateBtn = document.getElementById('rig-sig-state');
   const btnChannels = document.getElementById('btn-rig-channels');
+  const ifaceDbuEl  = document.getElementById('rig-iface-dbu');
   const scopeCanvas = document.getElementById('rig-scope');
   const scopeOutCanvas = document.getElementById('rig-scope-out');
   const scopesWrap  = document.getElementById('rig-scopes');
@@ -441,6 +452,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     scopesOpen: lsGet(SCOPESOPEN_KEY, '0') === '1',    // in/out scopes visible (default collapsed to save room)
     scopeGain: (() => { const v = parseFloat(lsGet(SCOPEGAIN_KEY, '1.8')); return Number.isFinite(v) ? Math.max(0.5, Math.min(6, v)) : 1.8; })(),  // visual-only display gain (scopes are short now)
     channels: (() => { const v = lsGet(CHANNELS_KEY, 'mono'); return CHANNEL_MODES.includes(v) ? v : 'mono'; })(),
+    interfaceDbu: (() => { const v = parseFloat(lsGet(IFACEDBU_KEY, String(CAL_DEFAULT_INTERFACE_DBU))); return Number.isFinite(v) ? Math.max(-20, Math.min(30, v)) : CAL_DEFAULT_INTERFACE_DBU; })(),
     strip: loadStripConfig(),                          // channel strip config
     mini: lsGet(MINI_KEY, '0') === '1',                // pedalboard (mini) mode
     ghost: lsGet(GHOST_KEY, '0') === '1',              // chrome-free ghost layer
@@ -496,6 +508,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   looperAudio.primeRigLimiter(model.rigLimiter);                    // rig master brickwall limiter
   looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
   looperAudio.setChannels(model.channels);                         // value-only until capture opens
+  looperAudio.setInterfaceLevel(model.interfaceDbu);               // NAM input calibration reference
   looperAudio.setStripConfig(model.strip);                         // applied when capture opens
 
   // Per-track renderers + DOM handles, keyed by track id.
@@ -1188,6 +1201,21 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setChannels(model.channels);   // reopens capture if live
     refreshChannelsBtn();
   }
+  // Interface input level — the dBu that reads 0 dBFS on the rig's input
+  // (the interface spec sheet's max instrument-input level). Calibrated NAM
+  // captures are scaled against it so they're hit as hard as their creator
+  // hit the gear. Hardware, so it lives outside qualems and tones.
+  function setInterfaceDbu(v) {
+    const n = parseFloat(v);
+    model.interfaceDbu = Number.isFinite(n) ? Math.max(-20, Math.min(30, Math.round(n * 2) / 2)) : CAL_DEFAULT_INTERFACE_DBU;
+    lsSet(IFACEDBU_KEY, String(model.interfaceDbu));
+    looperAudio.setInterfaceLevel(model.interfaceDbu);
+    refreshIfaceDbu();
+    if (ampLoadedModel) setLoaderMsg('amp', ampSummary(ampLoadedName, ampLoadedModel), false);
+  }
+  function refreshIfaceDbu() {
+    if (ifaceDbuEl && document.activeElement !== ifaceDbuEl) ifaceDbuEl.value = String(model.interfaceDbu);
+  }
   // Nudge (ms): slides every loop window live to compensate record latency.
   function setOffsetMs(v) {
     model.offsetMs = Math.max(-200, Math.min(500, Math.round(Number(v) || 0)));
@@ -1730,7 +1758,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     strip: ['earth', 'metal', 'amp', 'cab', 'delay', 'reverb'],
     drive: ['earth', 'metal'],
     tone:  ['amp', 'eq', 'cab'],
-    space: ['delay', 'reverb'],
+    space: ['spring', 'delay', 'reverb'],
     util:  ['geq', 'comp', 'hpf', 'gate', 'peq'],
   };
   const headChips = new Map();   // stage id -> chip button[]
@@ -2462,7 +2490,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (cab) cabSelEl = sel; else ampSelEl = sel;
     // Level-match toggle — lives with the capture controls, not the tone knobs,
     // because it's a property of which capture is loaded.
-    let norm = null;
+    let norm = null, cal = null;
     if (!cab) {
       norm = document.createElement('button');
       norm.type = 'button'; norm.className = 'ctrl-btn'; norm.textContent = 'norm';
@@ -2471,6 +2499,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
                  + 'the lvl knob stays yours. Off = the capture’s own level.';
       norm.addEventListener('click', () => setAmpNorm(!model.strip.amp.norm));
       ampNormBtn = norm;
+      cal = document.createElement('button');
+      cal.type = 'button'; cal.className = 'ctrl-btn'; cal.textContent = 'cal';
+      cal.title = 'Input calibration (on by default): scales your signal into the capture by '
+                + '(interface dBu − the capture’s declared input dBu), so it’s hit exactly as hard '
+                + 'as its creator hit the real amp — a clean amp stays clean. Set your interface '
+                + 'level in utility → input. Captures that declare no input level are left alone.';
+      cal.addEventListener('click', () => setAmpCal(model.strip.amp.cal === false));
+      ampCalBtn = cal;
     }
     // Per-loader result line. A capture that can't load has to say so HERE —
     // the looper's status line is in another subpanel and is easy to miss.
@@ -2481,8 +2517,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // line beneath them, so it has room to show the saved file's full name.
     row.append(file, btn, del);
     if (norm) row.append(norm);
+    if (cal) row.append(cal);
     row.append(sel, msg);
-    if (cab) renderCabLib(); else { renderAmpLib(); syncAmpNorm(); }
+    if (cab) renderCabLib(); else { renderAmpLib(); syncAmpNorm(); syncAmpCal(); }
     return row;
   }
   // Toggle capture level-matching. Straight to the model + audio rather than via
@@ -2493,6 +2530,21 @@ export function createLooper({ audio, syncStrudel } = {}) {
     persistStrip();
     syncAmpNorm();
     rememberAmpTone();
+  }
+  // Toggle input calibration — same direct path as norm.
+  function setAmpCal(on) {
+    model.strip.amp.cal = !!on;
+    looperAudio.setStripParam('amp', 'cal', !!on);
+    persistStrip();
+    syncAmpCal();
+    rememberAmpTone();
+  }
+  function syncAmpCal() {
+    if (!ampCalBtn) return;
+    const on = model.strip.amp.cal !== false;
+    ampCalBtn.classList.toggle('active', on);
+    ampCalBtn.setAttribute('aria-pressed', String(on));
+    if (ampLoadedModel) setLoaderMsg('amp', ampSummary(ampLoadedName, ampLoadedModel), false);
   }
   function syncAmpNorm() {
     if (!ampNormBtn) return;
@@ -2529,7 +2581,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const selName = list.find((e) => e.id === sel.value)?.name;
     sel.title = selName || sel.dataset.help || '';
   }
-  let cabSelEl = null, ampSelEl = null, cabMsgEl = null, ampMsgEl = null, ampNormBtn = null;
+  let cabSelEl = null, ampSelEl = null, cabMsgEl = null, ampMsgEl = null, ampNormBtn = null, ampCalBtn = null;
   // The capture currently in the strip, so toggling `norm` can restate its trim.
   let ampLoadedModel = null, ampLoadedName = '';
   function buildCabLoader() { return buildLibLoader('cab'); }
@@ -2607,6 +2659,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
         : `${parsed.loudnessDb.toFixed(1)} dB capture`);
     } else if (model.strip.amp.norm) {
       bits.push('no declared loudness — not level-matched');
+    }
+    // Input calibration — what level the capture was trained at and the exact
+    // correction being applied, so the drive into the model is never a mystery.
+    if (Number.isFinite(parsed.inputLevelDbu)) {
+      const calOn = model.strip.amp.cal !== false;
+      const db = 20 * Math.log10(calTrimFor(parsed.inputLevelDbu, model.interfaceDbu));
+      bits.push(calOn
+        ? `cal ${db >= 0 ? '+' : ''}${db.toFixed(1)} dB (${parsed.inputLevelDbu.toFixed(1)} dBu capture → ${model.interfaceDbu.toFixed(1)} dBu interface)`
+        : `${parsed.inputLevelDbu.toFixed(1)} dBu capture · cal off`);
+    } else if (model.strip.amp.cal !== false) {
+      bits.push('no declared input level — uncalibrated');
     }
     // NAM captures are trained at a fixed rate; a context running at another
     // rate shifts the model's frequency response, so say so instead of hiding it.
@@ -2787,6 +2850,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rebuildStrip();
     refreshMini();
     syncAmpNorm();
+    syncAmpCal();
   }
   // Re-select a cab pointer from a tone slice. A pointer missing from the
   // library leaves the current cab (the qualem policy for absent assets).
@@ -5026,6 +5090,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const i = CHANNEL_MODES.indexOf(model.channels);
     setChannels(CHANNEL_MODES[(i + 1) % CHANNEL_MODES.length]);
   });
+  if (ifaceDbuEl) {
+    ifaceDbuEl.addEventListener('change', () => setInterfaceDbu(ifaceDbuEl.value));
+    // Typing in the field must not reach the page's global key shortcuts.
+    ifaceDbuEl.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') ifaceDbuEl.blur(); });
+  }
   if (btnMini)   btnMini.addEventListener('click', () => { toggleMini(); });
   if (btnGhost)  btnGhost.addEventListener('click', () => { toggleGhost(); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
@@ -5094,6 +5163,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   refreshMuteBtn();
   refreshBufferBtn();
   refreshChannelsBtn();
+  refreshIfaceDbu();
   refreshStripBtn();
   refreshTunerBtn();
   refreshLoopBtn();
