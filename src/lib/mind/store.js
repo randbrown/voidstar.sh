@@ -685,10 +685,14 @@ export async function purgeExpiredTombstones() {
 }
 
 // ── Cross-device settings (public identifiers only — never tokens) ──
-
-const SETTINGS_KEYS = {
-  gdriveClientId: 'voidstar.mind.gdrive.clientId',
-};
+// Currently empty, plumbing kept for future keys. The Google client id used
+// to ride here and must not: drive.file only shows files the current client
+// id created, so a device can only read a backup it is *already* on the right
+// client for — inheriting the id can only ever switch a device to another
+// client (an old override fill-emptied into devices on the app-owned id, and
+// came back right after being cleared), splitting the data across two Drive
+// file sets that each report "synced". Same fix as setlist/store.js.
+const SETTINGS_KEYS = {};
 
 function getSettingsRaw() {
   const out = {};

@@ -504,7 +504,7 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
 Drive uses an **app-owned** OAuth client id (`src/lib/qualia/google-config.js`,
 from `PUBLIC_GOOGLE_CLIENT_ID`), so the user just taps **"Sign in with Google"**
 — no client-id entry. `getClientId()` prefers a user override
-(`voidstar.mind.gdrive.clientId`, Settings → advanced, still rides the backup)
+(`voidstar.mind.gdrive.clientId`, Settings → advanced — deliberately **not** in the synced `settings`: inheriting it could only switch a device onto another client's drive.file files, and an old override kept resurrecting after being cleared; the cached token is stamped with its client id and dropped when the id changes, and diagnostics shows a client fingerprint to compare across devices)
 and otherwise uses the app id; empty app id (e.g. a build without the env var)
 falls back to requiring the override, so the flow is unchanged for self-hosts.
 The Drive **Picker** additionally needs `PUBLIC_GOOGLE_PICKER_API_KEY`

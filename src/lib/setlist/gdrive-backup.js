@@ -71,8 +71,22 @@ export function usingAppClientId() {
 }
 
 export function setClientId(id) {
+  const before = getClientId();
   if (id) localStorage.setItem(CLIENT_ID_KEY, id);
   else localStorage.removeItem(CLIENT_ID_KEY); // clearing falls back to the app default
+  // A token is only good for the client that minted it (see getStoredToken);
+  // drop it now so the next backup can't run against the old client's files.
+  if (getClientId() !== before) localStorage.removeItem(TOKEN_KEY);
+}
+
+// Short, comparable fingerprint of the active client id (its leading project
+// number + a few chars) — two devices showing different values back up to
+// different Drive files.
+function clientIdFingerprint() {
+  const id = getClientId();
+  if (!id) return 'none';
+  const [proj, rest = ''] = id.split('-');
+  return `${proj}-${rest.slice(0, 6)}…`;
 }
 
 export function hasClientId() { return !!getClientId(); }
@@ -133,6 +147,7 @@ export async function gatherDiagnostics({ live = false } = {}) {
       { title: 'Identity', rows: [
         ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
         ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+        ['client fingerprint', `${clientIdFingerprint()} — must match on every device`],
       ] },
       { title: 'Auth', rows: [
         ['access token', tokenRow(TOKEN_KEY)],
@@ -201,9 +216,15 @@ function loadGis() {
   return _gisPromise;
 }
 
+// A cached token is bound to the client id that minted it: after the client
+// id changes (override set/cleared), the old token would keep reading and
+// writing the OLD client's drive.file files for up to an hour while the UI
+// says the new one is in use. Legacy tokens without a stamp are accepted
+// (they expire within the hour).
 function getStoredToken() {
   try {
     const data = JSON.parse(localStorage.getItem(TOKEN_KEY));
+    if (data && data.clientId && data.clientId !== getClientId()) return null;
     if (data && data.expiresAt > Date.now()) return data.token;
   } catch {}
   return null;
@@ -228,9 +249,10 @@ let _renewFailedBgAt = 0;
 let _renewFailedRealAt = 0;
 const RENEW_RETRY_MS = 5 * 60_000;
 
-function storeToken(token, expiresIn) {
+function storeToken(token, expiresIn, clientId) {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
     token,
+    clientId,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
   try { localStorage.setItem(EVER_KEY, '1'); } catch {}
@@ -254,7 +276,7 @@ function requestTokenOnce(clientId, prompt = '') {
           reject(new Error(response.error_description || response.error));
           return;
         }
-        storeToken(response.access_token, parseInt(response.expires_in) || 3600);
+        storeToken(response.access_token, parseInt(response.expires_in) || 3600, clientId);
         resolve(response.access_token);
       },
       error_callback: (err) => {
@@ -540,7 +562,7 @@ export async function initGdriveBackup({ interactive = true } = {}) {
     async peek() {
       const files = await findDataFiles(token);
       if (!files.length) return null;
-      return { modifiedTime: files[0].modifiedTime || '', multiple: files.length > 1 };
+      return { id: files[0].id, modifiedTime: files[0].modifiedTime || '', multiple: files.length > 1 };
     },
     // Version history (rotating timestamped copies). Methods close over the
     // token so callers never handle it directly.
@@ -966,6 +988,9 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
     setLastRemoteModified(remoteModified);
     clearDirtyIf(dirtyStamp);
     setLastBackupTime(Date.now());
+    // Repaint the pill: it reads the dirty flag, which a manual or focus-pull
+    // cycle (not just the debounced push) may have just cleared.
+    setBackupState('synced');
     return { merged, hadRemote: !!remote, changed, pushed: pushNeeded };
   } finally {
     _syncing = false;
