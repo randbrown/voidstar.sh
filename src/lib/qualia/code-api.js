@@ -651,7 +651,7 @@ export function installCodeApi(deps) {
       stop:    () => safe(() => looper.stopSignal()),
       stopAll: () => safe(() => looper.stopRig()),
       playing: () => !!safe(() => looper.isSignalOn(), false),
-      /** Toggle a pedalboard stage: earth/metal/comp/delay/reverb/eq/geq/peq/
+      /** Toggle a pedalboard stage: earth/metal/comp/spring/delay/reverb/eq/geq/peq/
        *  cab/amp/hpf, or a noise gate — gate (strip-wide), earthGate/metalGate
        *  (per-pedal; each only runs while its drive is engaged). */
       toggle: (stage) => safe(() => looper.toggleStripStage(stage)),

@@ -24,7 +24,7 @@ All paths are under `src/lib/qualia/`.
  file player (own ctx): buffer → source → level → limiter → destination
                                          └─► analyser ──► adopted as 'file'
  rig (native ctx):  in → GEQ(7-band) → comp → Earth → earth gate → Metal → metal gate
-                       → neural amp → EQ → cab IR
+                       → spring → neural amp → EQ → cab IR
                        → HPF → noise gate → ping-pong delay → reverb → PEQ(8-band parametric)
                        → pan → rig master → limiter → out
  vocoder (own ctx): mic → vocoder bank ⨉ carrier → clarity chain → limiter → mute gate → out
@@ -127,7 +127,7 @@ still delays the signal by its ~6 ms lookahead, and this is the live monitoring 
 
 ```
 in → GEQ(7-band graphic) → comp → Earth(drive) → earth gate → Metal(drive) → metal gate
-   → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF → gate
+   → spring(IR, pre-amp) → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF → gate
    → ping-pong delay → reverb → PEQ(8-band parametric) → pan → output
 ```
 
@@ -138,6 +138,21 @@ in → GEQ(7-band graphic) → comp → Earth(drive) → earth gate → Metal(dr
   and share the dry signal's room. **Comp** sits up front as an instrument compressor (clarity /
   attack into the drives); output limiting stays at the rig master (`limiter.js`), never in the
   strip. The **HPF** is post-cab: it de-woofs the cab'd tone and keeps low mud out of the wash.
+- **Spring** — the **pre-amp** reverb, where a Twin's own tank sits (its return mixes back in
+  ahead of the power section), so the wash goes through the capture's compression and the cab IR
+  like the real amp. A dry + wet insert: `dwell` gain (0…+24 dB) → a tanh "driver tube" soft clip
+  (`oversample:'2x'` only while on) → a **mono** `ConvolverNode` → `tone` low-pass (1.5–6 kHz) →
+  `mix`, with partial makeup so more dwell means more splash and somewhat more level. The IR is
+  **synthesized** by `spring-reverb.js`: a two-spring tank (≈33/41 ms first arrivals) built in the
+  frequency domain — each traversal is a **dispersive** delay (lows slower than highs, so every
+  arrival is a descending chirp), the echo train is a closed-form geometric series, highs decay
+  faster than lows, and the pan's ~110 Hz–4.6 kHz band limit is applied. `decay` is the low-mid
+  RT60 (0.5–5 s). A build is ~0.1–0.2 s of main-thread math, so it happens lazily on first engage,
+  decay drags are debounced (150 ms) and the last six tanks are cached; the buffer is dropped
+  300 ms after bypass (a bypassed convolver still burns CPU) and re-installed from the cache.
+  The dry leg is unity and the convolver has a direct head, so the dry path adds **no latency**.
+  `scripts/check-qualia-spring.mjs` (in `npm run check`) verifies decay rate, chirp direction,
+  band limit and determinism in node. The post-cab `reverb` stays the long stereo room.
 - **Gates** — the rig runs **three independent noise gates** off **one shared sidechain** (the
   vocoder's carrier-gate topology ported to the rig). Each gate is a VCA driven directly on its
   gain `AudioParam` by a sidechain envelope — rectify + LPF on the **clean strip input** — mapped
@@ -261,6 +276,28 @@ literally makes the fx more excitable.
   trim of exactly 1 and says so rather than guessing.
 - Worth remembering: loudness is measured at ONE operating point of a nonlinear model, so matching
   there doesn't guarantee a match at your own dynamics or with the drive knob up.
+
+### Input calibration (`cal`)
+
+A capture learns how the gear reacts to the level it was fed, but interfaces digitise the same
+pickup several dB apart (their instrument inputs clip anywhere from ~+8 to +20 dBu). Calibrated NAM
+files declare `metadata.input_level_dbu` — the dBu that hit 0 dBFS during training — and the rig
+knows the interface's own level (utility → input → `lvl`, persisted as
+`voidstar.qualia.looper.interfaceDbu`, default **+12 dBu**, the NAM plugin's default). The
+correction is `interface dBu − capture dBu` (`calTrimFor()`, clamped ±24 dB), the same one the NAM
+plugin's "calibrate input" applies.
+
+- **On by default** (`amp.cal: true`; anything but an explicit `false` counts as on, so old tones
+  and qualems pick it up). It scales only `ampDrive` — what goes **into** the model — never the dry
+  blend, and `gain` stays the performer's relative drive on top. For hot steel/guitar pickups into
+  a clean capture, this is what keeps the capture as clean as its creator heard it.
+- The trim rides with the **capture** (`ampInputDbu`, set in `setAmpModel`); the interface level is
+  **hardware**, so it lives outside the strip config (not in tones or qualems) and reaches the strip
+  via `looper-audio.setInterfaceLevel()` → `strip.setInterfaceLevel()`, surviving strip rebuilds.
+- **Never invisible:** the amp loader line states the capture's level and the exact dB applied (or
+  `cal off`); a capture with no declared level gets exactly 1 and says "uncalibrated". Captures
+  saved to the amp library before this existed were stored already-parsed without the field —
+  re-load the `.nam` once to pick it up.
 
 Sample rate is reported but not corrected — the loader line flags a capture trained at a rate other
 than the context's, since that shifts its frequency response.
