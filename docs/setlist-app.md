@@ -995,10 +995,21 @@ four tiers, in order:
 2. **Community/shared chart folders** — `sources.communityFolders`, walked
    **recursively** via `GET /drive/folder/:id/recursive`, since archives in
    circulation among musicians (e.g. Nashville Number Chart repos) are
-   commonly nested by artist/album. Capped (`RECURSIVE_MAX_DEPTH`/
-   `MAX_FOLDERS`/`MAX_FILES` in the worker) to protect the Drive API and the
-   worker's execution time; a capped walk returns `truncated: true` rather
-   than failing, and that surfaces as a warning in sync results.
+   commonly nested by artist/album. The walk is **resumable**: each worker
+   request spends at most `RECURSIVE_MAX_CALLS` Drive calls (under Workers'
+   50-subrequest ceiling), lists up to `RECURSIVE_PARENTS_PER_QUERY` folders
+   per call (`'a' in parents or 'b' in parents …`, 1000 files/page), and
+   returns `{files, cursor}`; `fetchDriveFilesRecursive()` (`sync.js`) POSTs
+   the cursor back until it is `null`, so library size no longer cuts the
+   scan short. A Drive quota/transient error leaves the unread folders in
+   the cursor for the next request to retry. Only folders deeper than
+   `RECURSIVE_MAX_DEPTH` (8) or a walk that needs more than 25 requests come
+   back partial — a sync-results warning, and on "search for chart" a
+   console warning (it is not an "unreadable folder" alert). Walks are
+   memoized for 5 minutes per folder so repeated per-song searches don't
+   re-list the library; "sync now" clears that memo. A pre-cursor worker
+   still answers the first GET, so an un-redeployed worker degrades to the
+   old one-shot read.
 3. **Web search for shared charts** — the worker's `GET /web/chart-search`
    web-searches for the song's chart in shared collections in the wild (NNS
    chart repos passed around as Drive/Dropbox links). Search runs through a

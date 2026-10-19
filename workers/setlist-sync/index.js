@@ -1057,75 +1057,131 @@ async function handleDriveFolder(folderId, request, env) {
   });
 }
 
-// Recursive folder walk for community/shared chart-repo folders (e.g. a
-// bandleader's master archive, organized artist/album/etc). Uses the same
+// Recursive folder walk for personal and community/shared chart folders (e.g.
+// a bandleader's master archive, organized artist/album/etc). Uses the same
 // GOOGLE_API_KEY-based access model as handleDriveFolder — works for any
-// link-shared folder, not just ones the caller owns. Capped to protect the
-// Drive API and this worker's execution time; a truncated walk still returns
-// whatever it found so far rather than failing outright.
-const RECURSIVE_MAX_DEPTH = 4;
-const RECURSIVE_MAX_FOLDERS = 200;
-const RECURSIVE_MAX_FILES = 2000;
+// link-shared folder, not just ones the caller owns.
+//
+// The walk is breadth-first and *resumable*: one worker request spends at
+// most RECURSIVE_MAX_CALLS Drive API calls (under the free plan's 50-subrequest
+// ceiling), lists up to RECURSIVE_PARENTS_PER_QUERY folders per call
+// ("'a' in parents or 'b' in parents …"), and hands back a `cursor` holding
+// the folders still to visit. The client POSTs that cursor back until it comes
+// back null, so a big library is read in a few requests instead of being cut
+// off at a fixed folder/file count.
+const RECURSIVE_MAX_DEPTH = 8;
+const RECURSIVE_MAX_FOLDERS = Infinity;
+const RECURSIVE_MAX_FILES = 3000;            // per request — the client resumes
+const RECURSIVE_MAX_CALLS = 40;              // Drive API calls per request
+const RECURSIVE_PARENTS_PER_QUERY = 20;
+const RECURSIVE_MAX_PENDING = 20000;         // sanity bound on a client-sent cursor
+const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+const DRIVE_ID = /^[a-zA-Z0-9_-]{10,100}$/;
+
+// A cursor comes back from the client, and its ids are spliced into a Drive
+// query string — keep only well-formed [id, depth] pairs.
+function sanitizeDriveCursor(cursor) {
+  const pair = (p) => Array.isArray(p) && DRIVE_ID.test(String(p[0])) && Number.isInteger(p[1]) && p[1] >= 0;
+  const pending = Array.isArray(cursor?.pending) ? cursor.pending.filter(pair).slice(0, RECURSIVE_MAX_PENDING) : [];
+  let batch = null;
+  if (cursor?.batch && Array.isArray(cursor.batch.ids)) {
+    const ids = cursor.batch.ids.filter(pair).slice(0, RECURSIVE_PARENTS_PER_QUERY);
+    const pageToken = typeof cursor.batch.pageToken === 'string' ? cursor.batch.pageToken.slice(0, 2000) : '';
+    if (ids.length) batch = { ids, pageToken };
+  }
+  return { pending, batch };
+}
 
 async function walkDriveFolder(rootFolderId, apiKey, {
   maxDepth = RECURSIVE_MAX_DEPTH,
   maxFolders = RECURSIVE_MAX_FOLDERS,
   maxFiles = RECURSIVE_MAX_FILES,
+  maxCalls = RECURSIVE_MAX_CALLS,
+  cursor = null,
 } = {}) {
   const files = [];
   let foldersVisited = 0;
-  let truncated = false;
-  const queue = [{ id: rootFolderId, depth: 0 }];
+  let calls = 0;
+  let depthCapped = false;
+  const state = cursor ? sanitizeDriveCursor(cursor) : { pending: [[rootFolderId, 0]], batch: null };
 
-  while (queue.length && foldersVisited < maxFolders && files.length < maxFiles) {
-    const { id, depth } = queue.shift();
-    foldersVisited++;
-    let pageToken = '';
-    do {
-      const params = new URLSearchParams({
-        q: `'${id}' in parents and trashed = false`,
-        key: apiKey,
-        fields: 'nextPageToken,files(id,name,mimeType,webViewLink,description)',
-        pageSize: '100',
-      });
-      if (pageToken) params.set('pageToken', pageToken);
+  while (calls < maxCalls && files.length < maxFiles) {
+    if (!state.batch) {
+      if (!state.pending.length || foldersVisited >= maxFolders) break;
+      const ids = state.pending.splice(0, Math.min(RECURSIVE_PARENTS_PER_QUERY, maxFolders - foldersVisited));
+      state.batch = { ids, pageToken: '' };
+      foldersVisited += ids.length;
+    }
+    const { ids, pageToken } = state.batch;
+    const params = new URLSearchParams({
+      q: `(${ids.map(([id]) => `'${id}' in parents`).join(' or ')}) and trashed = false`,
+      key: apiKey,
+      fields: 'nextPageToken,files(id,name,mimeType,webViewLink,description,parents)',
+      pageSize: '1000',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
 
+    calls++;
+    let data;
+    try {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`);
-      if (!res.ok) { truncated = true; break; }
+      // Quota/transient failures leave the batch in the cursor, so the
+      // client's next request retries it instead of losing those folders.
+      if (!res.ok) break;
+      data = await res.json();
+    } catch { break; } // e.g. the subrequest ceiling — resume next request
 
-      const data = await res.json();
-      for (const f of (data.files || [])) {
-        if (f.mimeType === 'application/vnd.google-apps.folder') {
-          if (depth < maxDepth) queue.push({ id: f.id, depth: depth + 1 });
-          continue;
-        }
-        const parsed = parseDriveFilename(f.name);
-        const meta = extractChartMeta(f.name, f.description || '');
-        files.push({
-          title: parsed.title,
-          artist: parsed.artist,
-          webViewLink: f.webViewLink,
-          mimeType: f.mimeType,
-          name: f.name,
-          ...meta,
-        });
-        if (files.length >= maxFiles) break;
+    const depthOf = new Map(ids);
+    const batchDepth = Math.min(...ids.map(([, d]) => d));
+    for (const f of (data.files || [])) {
+      const depth = depthOf.get(f.parents?.[0]) ?? batchDepth;
+      if (f.mimeType === DRIVE_FOLDER_MIME) {
+        if (depth < maxDepth) state.pending.push([f.id, depth + 1]);
+        else depthCapped = true;
+        continue;
       }
-      pageToken = data.nextPageToken || '';
-    } while (pageToken && files.length < maxFiles);
+      const parsed = parseDriveFilename(f.name);
+      const meta = extractChartMeta(f.name, f.description || '');
+      files.push({
+        title: parsed.title,
+        artist: parsed.artist,
+        webViewLink: f.webViewLink,
+        mimeType: f.mimeType,
+        name: f.name,
+        ...meta,
+      });
+    }
+    state.batch = data.nextPageToken ? { ids, pageToken: data.nextPageToken } : null;
   }
-  if (queue.length) truncated = true;
 
-  return { files, truncated, foldersVisited };
+  const more = !!state.batch || state.pending.length > 0;
+  return {
+    files,
+    // truncated: something was left unread by THIS request — callers that
+    // follow `cursor` only need to worry about depthCapped.
+    truncated: more || depthCapped,
+    depthCapped,
+    foldersVisited,
+    cursor: more ? state : null,
+  };
 }
 
+// Test surface for scripts/check-drive-walk.mjs (mocked fetch, no network).
+export const __driveInternals = { walkDriveFolder, sanitizeDriveCursor };
+
+// GET starts a walk; POST {cursor} resumes one from a previous response.
 async function handleDriveFolderRecursive(rootFolderId, request, env) {
   const apiKey = env.GOOGLE_API_KEY;
   if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
 
-  const result = await walkDriveFolder(rootFolderId, apiKey);
+  let cursor = null;
+  if (request.method === 'POST') {
+    const body = await request.json().catch(() => null);
+    cursor = body?.cursor || null;
+  }
+  const result = await walkDriveFolder(rootFolderId, apiKey, { cursor });
   return corsResponse(JSON.stringify(result), 200, request, env, {
-    'Cache-Control': 'public, max-age=600',
+    'Cache-Control': cursor ? 'no-store' : 'public, max-age=600',
   });
 }
 
@@ -1666,7 +1722,7 @@ async function handleWebChartSearch(request, env) {
     if (!apiKey) break;
     try {
       const { files, truncated } = await walkDriveFolder(folder.id, apiKey, {
-        maxDepth: 3, maxFolders: 20, maxFiles: 600,
+        maxDepth: 3, maxFolders: 20, maxFiles: 600, maxCalls: 6,
       });
       if (truncated) warnings.push(`Shared folder "${folder.resultTitle}" was only partially scanned`);
       for (const file of files) {
