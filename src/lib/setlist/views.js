@@ -15,7 +15,7 @@ import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelFor
 import { fetchLyrics, parseSyncedLyrics, searchLyrics, searchLyricsQuery } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore, findLibrarySongMatch } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics, isLocalDirty } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -444,6 +444,9 @@ export async function renderDashboard(root) {
     else if (!gbackup) { text = ''; }
     else if (state === 'syncing') { text = '⟳ backing up…'; cls = 'sl-sync-syncing'; }
     else if (state === 'pending') { text = '● unsaved changes'; cls = 'sl-sync-pending'; }
+    // Local edits Drive hasn't confirmed yet (persisted dirty flag) — never
+    // claim "backed up" over them, whatever the in-memory state says.
+    else if (isLocalDirty()) { text = '● unsaved changes'; cls = 'sl-sync-pending'; }
     else if (state === 'synced') { text = '✓ backed up'; cls = 'sl-sync-synced'; }
     else if (gbackup) { text = '✓ backed up'; cls = 'sl-sync-synced'; }
     pill.className = `sl-sync-pill ${cls}`;

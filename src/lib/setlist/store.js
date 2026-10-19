@@ -704,8 +704,15 @@ function setSourcesRaw(sources) {
 // Drive backup — a new device inherits them instead of re-entering by hand.
 // Tokens never ride the backup; per-device prefs (chart appearance, enhance)
 // stay local on purpose.
+//
+// The Google client id deliberately does NOT ride it: drive.file only sees
+// files the current client id created, so a device can only ever read a
+// backup it is *already* on the right client for — inheriting the id is
+// useless at best, and at worst it silently switches the device to another
+// client (an old self-host override riding the payload fill-empties into a
+// device on the app-owned id, or re-appears right after the user clears it),
+// splitting the dataset into two Drive files that both report "backed up".
 const SETTINGS_KEYS = {
-  gdriveClientId: 'voidstar.setlist.gdrive.clientId',
   spotifyClientId: 'voidstar.setlist.spotify.clientId',
 };
 
