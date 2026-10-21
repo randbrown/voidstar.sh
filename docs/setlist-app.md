@@ -30,7 +30,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
-| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
+| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt, full}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise; PDFs are stored as one PNG with every page stacked). `full` marks entries cached with whole-document rendering — see the chart-rendering section. Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
 | `deletions` | `key` (`${store}:${id}`) | `{key, store, id, deletedAt}` — record-level deletion tombstones; ride `exportAll()` so deletes propagate through the backup merge instead of resurrecting (180-day TTL, see the merge section) |
 
@@ -1350,6 +1350,26 @@ perform mode always renders the primary):
    current `chartUrl` invalidates a stale blob after a relink, and
    unrenderable blobs (HTML login pages cached before validation existed)
    self-heal by deletion.
+
+   **PDFs cache as every page, stacked.** The worker's
+   `/drive/file/:id/image` streams a Drive PDF raw (not Drive's
+   thumbnail, which only ever draws page 1), and `storeChartBlob` in
+   `chart-cache.js` rasterizes it with pdf.js (`rasterizePdfStack`,
+   `chart-pdf.js`; ≤ 12 pages, width capped to stay inside canvas limits)
+   into one tall PNG, so every render path still gets a single flat image
+   and annotations normalize against the whole document. A raw PDF blob
+   already in the cache (a direct `.pdf` link) is rasterized on read.
+   Entries written this way carry `full: true`. A Drive-file image entry
+   without it is the old page-1 thumbnail: `getOfflineChart` flags it
+   `stale`, the song page and annotation editor re-fetch it before
+   rendering (`getOrCacheOfflineChart` → `refreshStaleChart`, not in the
+   background, so the editor never holds strokes the migration below
+   rewrites), and auto-cache treats it as missing. When a stack replaces
+   a page-1 render, an annotation layer authored at page 1's aspect gets
+   its y values compressed (`migratePageOneAnnotation`) so the ink stays on
+   page 1. The song page and annotation editor also fetch an uncached
+   chart into the cache before falling back to steps 2–3, because the live
+   Drive thumbnail in step 3 is page 1 only.
 
    **Editing a chart keeps its URL, so the URL check can't see edits.** Two
    things cover that:

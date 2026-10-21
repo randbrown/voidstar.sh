@@ -10,6 +10,7 @@
 import * as store from './store.js';
 import { getSources, workerHeaders } from './sync.js';
 import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
+import { isPdfBlob, rasterizePdfStack } from './chart-pdf.js';
 
 // The token header, but ONLY when the fetch target is our own worker — a chart
 // URL can also be a direct third-party file (Dropbox/Drive link), and we must
@@ -119,9 +120,9 @@ export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl, { fresh = f
     // slips an HTML error/login page through here would otherwise poison the
     // cache with a permanently broken "image".
     if (!isRenderableChartBlob(blob)) return { ok: false, reason: `not an image (${blob.type || 'unknown type'})` };
-    await store.putChartBlob(cacheKey, blob, chartUrl);
+    const stored = await storeChartBlob(cacheKey, blob, chartUrl);
     announceCached(cacheKey);
-    return { ok: true, blob, size: blob.size };
+    return { ok: true, blob: stored, size: stored.size };
   } catch (e) {
     return { ok: false, reason: e.message || 'fetch failed' };
   }
@@ -179,6 +180,39 @@ export async function revalidateTextChart(cacheKey, chartUrl, cachedText) {
   return text;
 }
 
+// Store a fetched chart. PDFs are rasterized here — every page, stacked
+// into one tall PNG (chart-pdf.js) — so every render path keeps handling a
+// single flat image. `full` marks entries cached with whole-document
+// rendering; older entries of Drive files were the worker's page-1 thumbnail
+// and get re-fetched once (see getOfflineChart).
+async function storeChartBlob(cacheKey, blob, chartUrl) {
+  if (isPdfBlob(blob)) {
+    const r = await rasterizePdfStack(blob);
+    await migratePageOneAnnotation(cacheKey, r);
+    blob = r.blob;
+  }
+  await store.putChartBlob(cacheKey, blob, chartUrl, { full: true });
+  return blob;
+}
+
+// Annotations normalize y to the chart box's height, so when a page-1-only
+// render (the old cache / the live Drive thumbnail) gives way to the full
+// page stack, ink drawn on page 1 would stretch down the whole document.
+// A layer authored at page 1's aspect gets its y compressed by
+// stackHeight/page1Height so it stays on page 1.
+async function migratePageOneAnnotation(cacheKey, { pages, aspect, firstPageAspect }) {
+  if (pages < 2) return;
+  const ann = await store.getAnnotation(cacheKey);
+  if (!ann?.aspect || !ann.strokes?.length) return;
+  if (Math.abs(ann.aspect / firstPageAspect - 1) > 0.03) return;
+  const f = aspect / ann.aspect;
+  for (const s of ann.strokes) {
+    if (s.type === 'text') s.y *= f;
+    else if (s.points) for (const p of s.points) p.y *= f;
+  }
+  await store.putAnnotation({ ...ann, aspect });
+}
+
 function isRenderableChartBlob(blob) {
   return /^(?:image\/|application\/pdf|text\/plain)/.test(blob?.type || '');
 }
@@ -191,8 +225,17 @@ async function cacheSongs(songs, onProgress, { skipCached = false } = {}) {
   const workerUrl = getSources().workerUrl;
   let withCharts = songs.filter(s => s.chartUrl);
   let skipped = 0;
+  const stale = new Set();
   if (skipCached) {
     const cachedIds = new Set(await store.getCachedChartIds());
+    // A stale page-1-only Drive render counts as missing, so auto-cache
+    // upgrades it to the whole document (fresh: the browser may still hold
+    // the worker's old thumbnail response).
+    for (const s of withCharts) {
+      if (!cachedIds.has(s.id) || !isDriveFileChart(s.chartUrl)) continue;
+      const rec = await store.getChartBlob(s.id);
+      if (rec && !rec.full) { cachedIds.delete(s.id); stale.add(s.id); }
+    }
     const before = withCharts.length;
     withCharts = withCharts.filter(s => !cachedIds.has(s.id));
     skipped = before - withCharts.length;
@@ -201,7 +244,7 @@ async function cacheSongs(songs, onProgress, { skipCached = false } = {}) {
   const results = [];
   let ok = 0, failed = 0;
   for (let i = 0; i < withCharts.length; i++) {
-    const r = await cacheChartForSong(withCharts[i], workerUrl);
+    const r = await cacheChartForSong(withCharts[i], workerUrl, { fresh: stale.has(withCharts[i].id) });
     results.push(r);
     if (r.ok) ok++; else failed++;
     onProgress?.({ done: i + 1, total: withCharts.length, ok, failed, skipped, last: r });
@@ -245,11 +288,35 @@ export async function getSetlistOfflineStatus(setlist) {
   return { cached, total: chartedIds.length };
 }
 
+// Drive-file charts cached before whole-document rendering hold only the
+// worker's page-1 thumbnail; getOfflineChart flags them `stale`. This
+// re-fetches one (the worker now serves PDFs raw) — real images just get
+// re-downloaded once, after which the entry is marked full either way.
+// Concurrent calls for one key share a fetch. Resolves cacheChartByUrl's
+// result, or null when there's nothing to do (offline / no worker).
+const refreshing = new Map();
+export function refreshStaleChart(cacheKey, chartUrl) {
+  if (refreshing.has(cacheKey)) return refreshing.get(cacheKey);
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve(null);
+  const workerUrl = getSources().workerUrl;
+  if (!workerUrl) return Promise.resolve(null);
+  const p = cacheChartByUrl(cacheKey, chartUrl, workerUrl, { fresh: true })
+    .finally(() => refreshing.delete(cacheKey));
+  refreshing.set(cacheKey, p);
+  return p;
+}
+
+function isDriveFileChart(url) {
+  return !!chartFileId(url) && !isGoogleDocUrl(url);
+}
+
 // A song's cached chart, typed for rendering: {kind:'text', text} for
 // Google-Doc charts cached as plain text, {kind:'image', url, blob} (an
 // object URL the caller MUST URL.revokeObjectURL() when done, plus the raw
 // blob so callers can run pixel processing like chart-enhance.js) for
-// everything else, or null when not cached.
+// everything else, or null when not cached. `stale` on an image marks a
+// page-1-only Drive render from before whole-document caching — see
+// refreshStaleChart.
 //
 // Pass the song's current chartUrl as `expectedUrl` to guard against a stale
 // blob: the cache is keyed by songId, so if the chart link later changed (e.g.
@@ -275,7 +342,14 @@ export async function getOfflineChart(songId, expectedUrl) {
       if (rec.blob.type.startsWith('text/plain')) {
         return { kind: 'text', text: await rec.blob.text() };
       }
-      return { kind: 'image', url: URL.createObjectURL(rec.blob), blob: rec.blob };
+      // A raw PDF (a direct .pdf link cached before PDFs were rasterized)
+      // can't render in an <img> — rasterize every page and re-store.
+      if (isPdfBlob(rec.blob)) {
+        const blob = await storeChartBlob(songId, rec.blob, rec.sourceUrl || expectedUrl || '');
+        return { kind: 'image', url: URL.createObjectURL(blob), blob };
+      }
+      const stale = !rec.full && isDriveFileChart(rec.sourceUrl || expectedUrl);
+      return { kind: 'image', url: URL.createObjectURL(rec.blob), blob: rec.blob, stale };
     }
   } catch {}
   return null;

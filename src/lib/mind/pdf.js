@@ -5,7 +5,8 @@
 
 let _pdfjsPromise = null;
 
-async function getPdfjs() {
+// Shared loader — the setlist app's chart cache rasterizes PDFs with it too.
+export async function getPdfjs() {
   if (!_pdfjsPromise) {
     _pdfjsPromise = (async () => {
       // Legacy build on purpose: the modern build requires bleeding-edge JS
