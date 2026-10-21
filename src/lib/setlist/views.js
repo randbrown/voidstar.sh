@@ -18,7 +18,7 @@ import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics, isLocalDirty } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, refreshStaleChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
@@ -2420,6 +2420,30 @@ function mountRemoteChartInto(stage, song, chart = null) {
   }
 }
 
+// The cached chart, fetching it into the cache first when it's missing —
+// the uncached live render is Drive's page-1 thumbnail, so a multi-page PDF
+// would show (and be annotated as) its first page only. Null when it can't
+// be cached (offline, no worker, fetch failed): callers fall back to live.
+// A `stale` cached entry (a page-1-only Drive render from before
+// whole-document caching) is refreshed here BEFORE rendering — not in the
+// background — so the annotation editor never holds strokes that the
+// refresh's page-1 → page-stack migration rewrites underneath it.
+async function getOrCacheOfflineChart(song, chart) {
+  const cached = await getOfflineChart(chart.key, chart.url);
+  if (cached?.stale) {
+    const r = await refreshStaleChart(chart.key, chart.url);
+    if (!r?.ok) return cached;
+    URL.revokeObjectURL(cached.url);
+    return getOfflineChart(chart.key, chart.url);
+  }
+  if (cached || navigator.onLine === false) return cached;
+  const workerUrl = getSources().workerUrl;
+  const r = chart.isPrimary
+    ? await cacheChartForSong(song, workerUrl)
+    : await cacheChartByUrl(chart.key, chart.url, workerUrl);
+  return r.ok ? getOfflineChart(chart.key, chart.url) : null;
+}
+
 // Fill an empty song.key from chart text the page just rendered — the key is
 // usually right in the chart header, so a song with a linked doc chart should
 // never sit at "no key". Saves once, then patches the already-rendered "no
@@ -2452,7 +2476,7 @@ async function renderInlineChart(container, song, chart) {
   tools.appendChild(chartAppearanceButton(stage, 'detail'));
   container.appendChild(tools);
 
-  const cached = await getOfflineChart(chart.key, chart.url);
+  const cached = await getOrCacheOfflineChart(song, chart);
   if (cached?.kind === 'text') {
     const pre = mountTextChart(stage, cached.text);
     stage.appendChild(pre);
@@ -2939,7 +2963,7 @@ async function demotePrimaryToAlt(song) {
     await store.putAnnotation({ ...ann, songId: altKey });
     await store.deleteAnnotation(song.id);
   }
-  if (blob?.blob) await store.putChartBlob(altKey, blob.blob, alt.url);
+  if (blob?.blob) await store.putChartBlob(altKey, blob.blob, alt.url, { full: blob.full });
   await store.deleteChartBlob(song.id);
   return alt;
 }
@@ -2962,9 +2986,9 @@ async function swapPrimaryWithAlt(song, alt) {
   // Blob bytes are already in hand — swap them under the other keys with
   // corrected sourceUrls (getOfflineChart's stale-check would self-heal a
   // miss here anyway, at the cost of a refetch).
-  if (aBlob?.blob) await store.putChartBlob(song.id, aBlob.blob, song.chartUrl);
+  if (aBlob?.blob) await store.putChartBlob(song.id, aBlob.blob, song.chartUrl, { full: aBlob.full });
   else await store.deleteChartBlob(song.id);
-  if (pBlob?.blob) await store.putChartBlob(altKey, pBlob.blob, alt.url);
+  if (pBlob?.blob) await store.putChartBlob(altKey, pBlob.blob, alt.url, { full: pBlob.full });
   else await store.deleteChartBlob(altKey);
   await store.putSong(song);
 }
@@ -5237,10 +5261,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       }
 
       // Offline-cached chart first (renders with no network) — text for doc
-      // charts, image otherwise; live text export for uncached docs, then the
-      // remote image/embed. Async reads are guarded against a fast swipe that
-      // has already moved us to a different song.
-      getOfflineChart(entry.songId, song.chartUrl).then(async (cached) => {
+      // charts, image otherwise; a missing or page-1-only cached chart is
+      // fetched whole first when online (getOrCacheOfflineChart); then live
+      // text export for uncached docs, then the remote image/embed. Async
+      // reads are guarded against a fast swipe that has already moved us to
+      // a different song.
+      const chartReady = getOrCacheOfflineChart(song, chartRef(song)).then(async (cached) => {
         if (currentChartWrap !== chartWrap) {
           if (cached?.kind === 'image') URL.revokeObjectURL(cached.url);
           return;
@@ -5268,7 +5294,11 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         }
       });
 
-      loadAnnotation(entry.songId).then(data => {
+      // After the chart settles: fetching a whole PDF over a page-1 cache
+      // rewrites this layer's y values (migratePageOneAnnotation), so a
+      // parallel read could paint pre-migration ink over the full stack.
+      chartReady.catch(() => {}).then(() => loadAnnotation(entry.songId)).then(data => {
+        if (currentChartWrap !== chartWrap) return;
         // The chart image's natural aspect (set by lockAspectToImage) is the
         // source of truth for the box shape. Only fall back to the authoring/
         // viewport aspect if the image hasn't provided one yet (e.g. an iframe
@@ -5479,7 +5509,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     // Offline-cached chart first (flat — text for docs, image otherwise —
     // which scrolls with the canvas and stays aligned); live text export for
     // docs, then embed/plain image as last resorts.
-    const cached = await getOfflineChart(annKey, chartUrl);
+    const cached = await getOrCacheOfflineChart(song, chartRef(song, alt));
     if (cached?.kind === 'text') {
       const pre = mountTextChart(stage, cached.text);
       stage.appendChild(pre);
@@ -5650,7 +5680,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
         await store.putSong(song);
         // The PNG bytes are already in hand — prime the offline cache
         // directly instead of a worker round-trip.
-        await store.putChartBlob(songId, blob, webViewLink);
+        await store.putChartBlob(songId, blob, webViewLink, { full: true });
         await store.deleteAnnotation(songId);
         if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
         showLinkToast('chart linked to this song', webViewLink);

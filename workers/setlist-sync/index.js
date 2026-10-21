@@ -1259,9 +1259,10 @@ async function handleDriveFileText(fileId, request, env) {
 // online rendering works cross-origin without CORS, but *reading* the bytes to
 // cache them does not — hence this proxy.
 //   - Real image files stream through as-is (best fidelity).
-//   - PDFs / Google Docs are rasterized to a first-page image via Drive's
-//     thumbnail renderer (multi-page charts only cache their first page; the
-//     client surfaces that as a caveat).
+//   - PDFs stream through raw too: the client rasterizes every page with
+//     pdf.js (Drive's thumbnail renderer only ever draws page 1).
+//   - Google Docs / anything else are rasterized to a first-page image via
+//     Drive's thumbnail renderer.
 // Access model matches the folder scan: files must be reachable by the API key
 // (i.e. link-shared), which they already are if they showed up in a scan.
 async function handleDriveFileImage(fileId, request, env) {
@@ -1277,12 +1278,13 @@ async function handleDriveFileImage(fileId, request, env) {
   } catch {}
 
   let upstream;
-  if (mimeType.startsWith('image/')) {
+  const isPdf = mimeType === 'application/pdf';
+  if (mimeType.startsWith('image/') || isPdf) {
     upstream = await fetch(
       `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${apiKey}`
     );
   } else {
-    // PDF, Google Doc, or unknown → let Drive rasterize the first page.
+    // Google Doc or unknown → let Drive rasterize the first page.
     upstream = await fetch(`https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`);
   }
 
@@ -1297,7 +1299,7 @@ async function handleDriveFileImage(fileId, request, env) {
   // The thumbnail endpoint answers a private/unshared file with a redirect to
   // a Google login page — a 200 whose body is HTML. Serving that as the
   // "image" poisons the client's offline chart cache; refuse it instead.
-  if (!contentType.startsWith('image/')) {
+  if (!contentType.startsWith('image/') && !(isPdf && contentType.startsWith('application/pdf'))) {
     return corsResponse(
       JSON.stringify({ error: `Drive returned ${contentType.split(';')[0]} instead of an image — is the file link-shared?` }),
       502, request, env,

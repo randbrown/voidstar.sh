@@ -374,8 +374,9 @@ export async function deleteAnnotationsForSong(songId) {
 
 // ── Cached chart images (offline) ──
 
-export const putChartBlob = (songId, blob, sourceUrl) =>
+export const putChartBlob = (songId, blob, sourceUrl, extra = {}) =>
   putSilent(CHARTS, {
+    ...extra,
     songId, blob, sourceUrl,
     mimeType: blob.type || '',
     size: blob.size || 0,
