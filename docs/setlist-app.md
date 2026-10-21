@@ -1361,13 +1361,14 @@ perform mode always renders the primary):
    already in the cache (a direct `.pdf` link) is rasterized on read.
    Entries written this way carry `full: true`. A Drive-file image entry
    without it is the old page-1 thumbnail: `getOfflineChart` flags it
-   `stale`, the song page and annotation editor re-fetch it before
-   rendering (`getOrCacheOfflineChart` → `refreshStaleChart`, not in the
-   background, so the editor never holds strokes the migration below
-   rewrites), and auto-cache treats it as missing. When a stack replaces
+   `stale`, the song page, annotation editor and perform mode re-fetch it
+   before rendering when online (`getOrCacheOfflineChart` →
+   `refreshStaleChart`, not in the background, so no view holds strokes the
+   migration below rewrites; perform mode also loads its annotation layer
+   only after the chart settles), and auto-cache treats it as missing. When a stack replaces
    a page-1 render, an annotation layer authored at page 1's aspect gets
    its y values compressed (`migratePageOneAnnotation`) so the ink stays on
-   page 1. The song page and annotation editor also fetch an uncached
+   page 1. The song page, annotation editor and perform mode also fetch an uncached
    chart into the cache before falling back to steps 2–3, because the live
    Drive thumbnail in step 3 is page 1 only.
 

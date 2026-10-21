@@ -5261,10 +5261,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       }
 
       // Offline-cached chart first (renders with no network) — text for doc
-      // charts, image otherwise; live text export for uncached docs, then the
-      // remote image/embed. Async reads are guarded against a fast swipe that
-      // has already moved us to a different song.
-      getOfflineChart(entry.songId, song.chartUrl).then(async (cached) => {
+      // charts, image otherwise; a missing or page-1-only cached chart is
+      // fetched whole first when online (getOrCacheOfflineChart); then live
+      // text export for uncached docs, then the remote image/embed. Async
+      // reads are guarded against a fast swipe that has already moved us to
+      // a different song.
+      const chartReady = getOrCacheOfflineChart(song, chartRef(song)).then(async (cached) => {
         if (currentChartWrap !== chartWrap) {
           if (cached?.kind === 'image') URL.revokeObjectURL(cached.url);
           return;
@@ -5292,7 +5294,11 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         }
       });
 
-      loadAnnotation(entry.songId).then(data => {
+      // After the chart settles: fetching a whole PDF over a page-1 cache
+      // rewrites this layer's y values (migratePageOneAnnotation), so a
+      // parallel read could paint pre-migration ink over the full stack.
+      chartReady.catch(() => {}).then(() => loadAnnotation(entry.songId)).then(data => {
+        if (currentChartWrap !== chartWrap) return;
         // The chart image's natural aspect (set by lockAspectToImage) is the
         // source of truth for the box shape. Only fall back to the authoring/
         // viewport aspect if the image hasn't provided one yet (e.g. an iframe
