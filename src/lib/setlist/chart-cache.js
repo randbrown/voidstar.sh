@@ -68,11 +68,16 @@ export function chartImageFetchUrl(chartUrl, workerUrl) {
 
 // Fetch a Google-Doc chart's full text for live (uncached) rendering.
 // Returns the text or null (not a doc, no worker, fetch failed, empty).
-export async function fetchChartText(chartUrl, workerUrl) {
+// `fresh` skips the browser HTTP cache (the worker answers with a 5-min
+// max-age), so an edit made in Google Docs a moment ago is actually seen.
+export async function fetchChartText(chartUrl, workerUrl, { fresh = false } = {}) {
   const id = chartFileId(chartUrl);
   if (!id || !workerUrl || !isGoogleDocUrl(chartUrl)) return null;
   try {
-    const res = await fetch(`${workerUrl}/drive/file/${id}/text`, { headers: workerHeaders() });
+    const res = await fetch(`${workerUrl}/drive/file/${id}/text`, {
+      headers: workerHeaders(),
+      cache: fresh ? 'no-store' : 'default',
+    });
     if (!res.ok) {
       // Loud on purpose: a failure here silently degrades to the iframe
       // embed, whose internal scroll breaks annotation alignment.
@@ -97,11 +102,16 @@ export function isChartCacheable(song, workerUrl) {
 // song mutation and NO key auto-fill: an alternate may be a different
 // arrangement in a different key/capo, and filling song.key from it would
 // poison the primary's data. Returns { ok, blob?, size?, reason? }.
-export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl) {
+// `fresh` (the user-pressed "↻ re-fetch") bypasses the browser HTTP cache —
+// the worker's max-age would otherwise hand back the pre-edit bytes.
+export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl, { fresh = false } = {}) {
   const url = chartImageFetchUrl(chartUrl, workerUrl);
   if (!url) return { ok: false, reason: 'needs worker' };
   try {
-    const res = await fetch(url, { headers: headersForUrl(url, workerUrl) });
+    const res = await fetch(url, {
+      headers: headersForUrl(url, workerUrl),
+      cache: fresh ? 'no-store' : 'default',
+    });
     if (!res.ok) return { ok: false, reason: `fetch ${res.status}` };
     const blob = await res.blob();
     if (!blob || blob.size === 0) return { ok: false, reason: 'empty' };
@@ -118,9 +128,9 @@ export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl) {
 }
 
 // Download + store one song's PRIMARY chart. Returns { songId, ok, reason }.
-export async function cacheChartForSong(song, workerUrl) {
+export async function cacheChartForSong(song, workerUrl, opts) {
   if (!song?.chartUrl) return { songId: song?.id, ok: false, reason: 'no chart' };
-  const r = await cacheChartByUrl(song.id, song.chartUrl, workerUrl);
+  const r = await cacheChartByUrl(song.id, song.chartUrl, workerUrl, opts);
   if (!r.ok) return { songId: song.id, ok: false, reason: r.reason };
   // A text chart's header usually states the key (and the tempo) — fill the
   // empty ones while the bytes are in hand. This also runs during bulk
@@ -142,6 +152,31 @@ export async function cacheChartForSong(song, workerUrl) {
     } catch {}
   }
   return { songId: song.id, ok: true, size: r.size };
+}
+
+// Stale-while-revalidate for Google-Doc charts. The offline cache is keyed by
+// URL, and editing the Doc keeps the URL — so without this a cached chart
+// never picks up edits. Callers render the cached text first (works offline),
+// then call this: it refetches the live export (bypassing the HTTP cache)
+// and, when the text changed, rewrites the cache entry and resolves to the
+// new text so the caller can swap it in. Resolves null when unchanged, not a
+// doc, offline, or the fetch failed. Throttled per key so swiping back and
+// forth in perform mode doesn't refetch every time.
+const REVALIDATE_MIN_MS = 60_000;
+const lastRevalidated = new Map();
+export async function revalidateTextChart(cacheKey, chartUrl, cachedText) {
+  if (!isGoogleDocUrl(chartUrl)) return null;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
+  const now = Date.now();
+  if (now - (lastRevalidated.get(cacheKey) || 0) < REVALIDATE_MIN_MS) return null;
+  lastRevalidated.set(cacheKey, now);
+  const text = await fetchChartText(chartUrl, getSources().workerUrl, { fresh: true });
+  if (!text || text === cachedText) return null;
+  try {
+    await store.putChartBlob(cacheKey, new Blob([text], { type: 'text/plain; charset=utf-8' }), chartUrl);
+    announceCached(cacheKey);
+  } catch {}
+  return text;
 }
 
 function isRenderableChartBlob(blob) {

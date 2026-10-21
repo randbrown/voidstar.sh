@@ -440,7 +440,7 @@ open the song:
 
 The panel also carries the other library-wide actions, each likewise paired
 with a per-song tool: **auto-link now** (↔ "search for chart" + "relink
-spotify"/"pick spotify track"), **download all charts** (↔ "cache offline"),
+spotify"/"pick spotify track"), **download all charts** (↔ "↻ refresh chart"),
 **batch link charts** (↔ the edit-details Chart URL field), and **spotify
 quick-link**'s unlinked-songs list (↔ "spotify search" / "spotify best guess"
 on songs without a link). After a pass finishes, the library list re-pulls in place
@@ -1228,7 +1228,7 @@ export are all primary-only by design. **Alternates** live in
 - **Switching:** with alternates present the song page shows a chip row
   (`.sl-chart-tabs`); the selection lives in sessionStorage
   (`chartTab.<songId>`, see the state table). The selected alternate gets an
-  action strip: annotate / open doc / rename / cache offline / make primary
+  action strip: annotate / open doc / rename / ↻ refresh chart / make primary
   (`swapPrimaryWithAlt` — URLs, annotation layers, and cached blobs all
   swap) / remove (deletes the alternate's annotation + blob records; the
   Drive doc itself is untouched).
@@ -1241,7 +1241,7 @@ export are all primary-only by design. **Alternates** live in
   `extra3` slot `scratch` uses); a stale alt id bails back to the song page.
   Alt-annotate never enters scratch mode (an alternate always has a URL).
 - **Offline:** alternates warm the cache lazily when viewed, plus a per-alt
-  "cache offline" button (`cacheChartByUrl` — deliberately **no key
+  "↻ refresh chart" button (`cacheChartByUrl` — deliberately **no key
   auto-fill**: an alternate may be a different arrangement in a different
   key, and filling `song.key` from it would poison the primary's data).
   Bulk "download all charts" and the offline N/M counts deliberately ignore
@@ -1350,6 +1350,25 @@ perform mode always renders the primary):
    current `chartUrl` invalidates a stale blob after a relink, and
    unrenderable blobs (HTML login pages cached before validation existed)
    self-heal by deletion.
+
+   **Editing a chart keeps its URL, so the URL check can't see edits.** Two
+   things cover that:
+   - **Cached text charts revalidate (stale-while-revalidate).** The song
+     page, perform mode and the annotation editor render the cached text
+     first, which works offline, then call `revalidateTextChart()`. It
+     refetches `/drive/file/:id/text` with `cache: 'no-store'`, at most once
+     a minute per cache key and only while `navigator.onLine`. If the text
+     changed, it rewrites the blob and the mounted `<pre>` is swapped in
+     place (`refreshTextChartWhenStale` in `views.js`). On the song page a
+     toast says so, and adds an annotation-alignment warning when the chart
+     has ink, since a reflowed doc can shift what the ink points at.
+   - **"↻ refresh chart"** (song page action bar, and per alternate) is the
+     manual force-refetch, e.g. for scans and PDFs. It calls `cacheChartForSong`
+     / `cacheChartByUrl` with `{ fresh: true }`, which fetches with
+     `cache: 'no-store'` because the worker's `max-age` (5 min for text, 1 day
+     for images) would otherwise hand back the pre-edit bytes. It then
+     re-renders. Drive's thumbnail renderer can itself lag a few minutes
+     behind an edit to an image or PDF.
 2. **Live text export** — Google-Doc charts fetch
    `GET /drive/file/:id/text` (`fetchChartText`) and mount flat via
    `mountTextChart`.
