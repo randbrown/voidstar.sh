@@ -91,7 +91,8 @@ per peer, and never eval'd — same posture as entangle ingress.
 
 Tabs: **rig** (freeze stack + **grab**, drives, strip toggles, the **signal ▶/■** state
 pad beside pause — the rig's signal transport is session-local, so after a rig reload
-the phone is where you notice it's stopped and start it; rig/delay/reverb + earth/metal
+the phone is where you notice it's stopped and start it; spring/delay/reverb on/off pads
+(signal order — spring is the pre-amp tank); rig/spring/delay/reverb + earth/metal
 gain sliders — absolute, like MIDI CC; press-and-hold a slider's ↺ chip ~0.4 s to snap it back to
 default — the chip sits in the label row, off the track, so a reset can't graze the
 fader, and the fill sweep confirms the hold; grab lives here as well as on **loop**
@@ -110,7 +111,7 @@ cam walk — the **set clock** τ readout + reset, camera, pause, blackout).
 
 Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states —
 including the rig signal ▶/■ — the record-arm state — `recArming` + `recArm {delaySec, countIn, transient, free}` — freeze
-depth, strip toggles — earth/metal/delay/reverb/tuner — pause, vox mute, blackout,
+depth, strip toggles — earth/metal/spring/delay/reverb/tuner — pause, vox mute, blackout,
 active quale, pad voices, cps, tap-history depths, auto/walk toggle states, and the
 chron clock `tau`/`horizonMin` behind the τ readout) so the phone reflects reality;
 every on/off pad on the remote is stateful (lit from the snapshot, flipped
