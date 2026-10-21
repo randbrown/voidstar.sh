@@ -6,7 +6,7 @@
 // The pad mirrors the DOIO KB16 keymap's action surface (same action ids —
 // one shared dispatch map on the host, so keystrokes / MIDI / tether never
 // drift), organized into thumb-sized tabs:
-//   RIG   — freeze stack + grab, drives, strip toggles, rig/delay/reverb sliders
+//   RIG   — freeze stack + grab, drives, strip toggles, rig/spring/delay/reverb sliders
 //   LOOP  — looper transport + grab, the one-button rec (idle / counting in /
 //           rolling), the free-run record-start modes, vox mute, pause
 //   SEQ   — strudel/sequencer transport, tempo, live drum pads (tap to play;
@@ -212,7 +212,7 @@ export async function initTetherClient(root) {
     freezeDepth: 0, quale: '', voices: [], grid: null,
     tapUndoDepth: 0, tapRedoDepth: 0,
     walkOn: false, autoCycleOn: false, autoPhaseOn: false,
-    earthOn: false, metalOn: false, delayOn: false, reverbOn: false, compOn: false,
+    earthOn: false, metalOn: false, springOn: false, delayOn: false, reverbOn: false, compOn: false,
     tunerOn: false, paused: false, voxMuted: false, blackoutOn: false,
     tau: null, horizonMin: 0,
     // deck (audio-file backing track)
@@ -368,7 +368,11 @@ export async function initTetherClient(root) {
         grid(3,
           padBtn('earth', 'earth', { sub: 'drive', lit: 'earth', flip: 'earthOn' }),
           padBtn('metal', 'metal', { sub: 'zone', lit: 'metal', flip: 'metalOn' }),
-          padBtn('tuner', 'tuner', { sub: 'toggle', lit: 'tuner', flip: 'tunerOn' }),
+          padBtn('tuner', 'tuner', { sub: 'toggle', lit: 'tuner', flip: 'tunerOn' })),
+        // Space row in signal order — spring (pre-amp tank) → delay → reverb,
+        // with comp riding along at the end.
+        grid(4,
+          padBtn('spring', 'springToggle', { sub: 'on / off', lit: 'spring', flip: 'springOn' }),
           padBtn('delay', 'delayToggle', { sub: 'on / off', lit: 'delay', flip: 'delayOn' }),
           padBtn('reverb', 'reverbToggle', { sub: 'on / off', lit: 'reverb', flip: 'reverbOn' }),
           padBtn('comp', 'compToggle', { sub: 'on / off', lit: 'comp', flip: 'compOn' })),
@@ -383,6 +387,8 @@ export async function initTetherClient(root) {
         // 0–2 matches the rig's real range (RIG_LEVEL_MAX): >1.0 is boost into
         // the rig limiter, which the leader force-engages while boosted.
         sliderRow('rig master', 'rig.level', 0, 2, 0.01, 1),
+        // Spring's reset target matches STRIP_DEFAULTS (spring mix: 0.3).
+        sliderRow('spring mix', 'spring.mix', 0, 1, 0.01, 0.3),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
         // Drive gains — reset targets match STRIP_DEFAULTS (drive: 0.35).
@@ -578,6 +584,7 @@ export async function initTetherClient(root) {
         : kind === 'earth'     ? state.earthOn
         : kind === 'metal'     ? state.metalOn
         : kind === 'tuner'     ? state.tunerOn
+        : kind === 'spring'    ? state.springOn
         : kind === 'delay'     ? state.delayOn
         : kind === 'reverb'    ? state.reverbOn
         : kind === 'comp'      ? state.compOn

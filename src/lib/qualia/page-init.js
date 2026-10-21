@@ -8706,6 +8706,7 @@ export function initQualiaPage() {
     qualeNext:    () => qualeStep(+1),
     phasePrev:    () => phaseShift(-1),
     phaseNext:    () => phaseShift(+1),
+    springToggle: () => looper.toggleStripStage?.('spring'),
     delayToggle:  () => looper.toggleStripStage?.('delay'),
     reverbToggle: () => looper.toggleStripStage?.('reverb'),
     compToggle:   () => looper.toggleStripStage?.('comp'),
@@ -9360,6 +9361,7 @@ export function initQualiaPage() {
         applySlider: (id, v) => {
           switch (id) {
             case 'rig.level':  looper.setRigLevel?.(v); break;
+            case 'spring.mix': looper.setStripParam?.('spring', 'mix', v); break;
             case 'delay.mix':  looper.setStripParam?.('delay', 'mix', v); break;
             case 'reverb.mix': looper.setStripParam?.('reverb', 'mix', v); break;
             // Drive gains — wire id `.gain` matches the pedals' knob label;
@@ -9404,6 +9406,7 @@ export function initQualiaPage() {
             // Rig strip + stage toggles — lights the tether's on/off pads.
             earthOn:    !!looper.isStripStageOn?.('earth'),
             metalOn:    !!looper.isStripStageOn?.('metal'),
+            springOn:   !!looper.isStripStageOn?.('spring'),
             delayOn:    !!looper.isStripStageOn?.('delay'),
             reverbOn:   !!looper.isStripStageOn?.('reverb'),
             compOn:     !!looper.isStripStageOn?.('comp'),

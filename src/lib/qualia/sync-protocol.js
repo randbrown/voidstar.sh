@@ -52,7 +52,8 @@ export const CTL_ACTIONS = new Set([
   // phone needs a way to start the live input after a rig reload)
   'sigPlayStop',
   // rig drives + strip toggles
-  'tuner', 'earth', 'metal', 'delayToggle', 'reverbToggle', 'compToggle',
+  'tuner', 'earth', 'metal', 'springToggle', 'delayToggle', 'reverbToggle',
+  'compToggle',
   // freeze stack (Frippertronics)
   'freeze', 'freezePop', 'freezeRegrab', 'freezeClear',
   // looper transport. `recToggle` is the tether's single rec button (arm /
@@ -80,6 +81,7 @@ export const CTL_SLIDERS = {
   // Full fader range including boost (>1 drives the rig limiter, which the
   // host force-engages while boosted) — the tether slider spans the same.
   'rig.level':  { min: 0,    max: RIG_LEVEL_MAX },
+  'spring.mix': { min: 0,    max: 1 },
   'delay.mix':  { min: 0,    max: 1 },
   'reverb.mix': { min: 0,    max: 1 },
   // Drive pedal gains (strip param id `drive` on the host — see applySlider).

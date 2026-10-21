@@ -5274,7 +5274,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       stripToggle(stageId, on);
     },
     // Read-side of the toggles above — the tether remote's cstate snapshot
-    // lights its earth/metal/delay/reverb/tuner pads from these.
+    // lights its earth/metal/spring/delay/reverb/tuner pads from these.
     isStripStageOn: (stageId) => !!model.strip[stageId]?.on,
     isTunerOn: () => !!model.tunerOn,
     // Tuner hotkey / pad / MIDI: brings the tuner up even with the rig hidden.
