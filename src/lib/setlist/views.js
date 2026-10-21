@@ -18,7 +18,7 @@ import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics, isLocalDirty } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
@@ -315,6 +315,17 @@ function mountTextChart(box, text) {
   pre.className = 'sl-text-chart';
   pre.textContent = text;
   return pre;
+}
+
+// Cached Doc charts render instantly (and offline), then check Google Docs
+// for a newer version in the background (revalidateTextChart); an edit swaps
+// into the mounted <pre> in place. onUpdated(text) runs after a swap.
+function refreshTextChartWhenStale(pre, cacheKey, chartUrl, cachedText, onUpdated) {
+  revalidateTextChart(cacheKey, chartUrl, cachedText).then((text) => {
+    if (!text || !pre.isConnected) return;
+    pre.textContent = text;
+    onUpdated?.(text);
+  }).catch(() => {});
 }
 
 // ── Shared Google Drive sync (used by Settings, per-page buttons, the pill) ──
@@ -2443,8 +2454,17 @@ async function renderInlineChart(container, song, chart) {
 
   const cached = await getOfflineChart(chart.key, chart.url);
   if (cached?.kind === 'text') {
-    stage.appendChild(mountTextChart(stage, cached.text));
+    const pre = mountTextChart(stage, cached.text);
+    stage.appendChild(pre);
     if (chart.isPrimary) maybeFillFromChartHeader(song, cached.text);
+    refreshTextChartWhenStale(pre, chart.key, chart.url, cached.text, async (text) => {
+      if (chart.isPrimary) maybeFillFromChartHeader(song, text);
+      // Ink is positioned over the old layout — a reflowed doc can shift it.
+      const ann = await loadAnnotation(chart.key);
+      showToast(ann?.strokes?.length
+        ? 'chart updated from Google Docs — check your annotations still line up'
+        : 'chart updated from Google Docs');
+    });
   } else if (cached) {
     const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
@@ -3006,14 +3026,16 @@ function buildAltActionsRow(song, alt, setlistId) {
     await store.putSong(song);
     refresh();
   }));
-  const cacheBtn = btn('cache offline', 'sl-btn-ghost sl-btn-xs', async () => {
+  const cacheBtn = btn('↻ refresh chart', 'sl-btn-ghost sl-btn-xs', async () => {
     cacheBtn.disabled = true;
-    cacheBtn.textContent = 'caching…';
-    const r = await cacheChartByUrl(store.altChartKey(song.id, alt.id), alt.url, getSources().workerUrl);
-    cacheBtn.textContent = r.ok ? '✓ cached offline' : 'cache failed';
-    if (!r.ok) alert(`couldn't cache this chart: ${r.reason}`);
-    setTimeout(() => { cacheBtn.textContent = 'cache offline'; cacheBtn.disabled = false; }, 2200);
+    cacheBtn.textContent = 'fetching…';
+    const r = await cacheChartByUrl(store.altChartKey(song.id, alt.id), alt.url, getSources().workerUrl, { fresh: true });
+    cacheBtn.textContent = r.ok ? '✓ refreshed' : 'fetch failed';
+    if (!r.ok) alert(`couldn't fetch this chart: ${r.reason}`);
+    else setTimeout(() => refresh(), 800); // re-render with the new bytes
+    setTimeout(() => { cacheBtn.textContent = '↻ refresh chart'; cacheBtn.disabled = false; }, 2200);
   });
+  cacheBtn.title = 'Re-download this chart from Drive, skipping any cached copy (picks up edits), and keep it for offline use';
   row.appendChild(cacheBtn);
   row.appendChild(btn('make primary', 'sl-btn-ghost sl-btn-xs', async () => {
     if (!confirm('Make this the primary chart? The current primary becomes an alternate; each chart keeps its own annotations.')) return;
@@ -3573,25 +3595,25 @@ export async function renderSongFocus(root, songId, setlistId) {
     readBtn.title = 'Pull key / BPM / key-change notes from the linked chart — scrapes doc text, AI-reads a scanned image';
     actionBar.appendChild(readBtn);
 
-    // "cache offline" — the library's "download all charts", this song only:
-    // pin this chart into the offline cache so perform mode works with no
-    // signal. (Text charts also fill an empty key from the chart header.)
-    const cacheBtn = btn('cache offline', 'sl-btn-ghost sl-btn-sm', async () => {
+    // "↻ refresh chart" — the library's "download all charts", this song
+    // only, but always a fresh fetch (no HTTP cache): pins the chart into the
+    // offline cache for perform mode AND is the force-refetch after editing
+    // it in Docs/Drive. (Text charts also fill an empty key from the header.)
+    const cacheBtn = btn('↻ refresh chart', 'sl-btn-ghost sl-btn-sm', async () => {
       cacheBtn.disabled = true;
-      cacheBtn.textContent = 'caching…';
-      const hadKey = !!song.key;
-      const r = await cacheChartForSong(song, getSources().workerUrl);
+      cacheBtn.textContent = 'fetching…';
+      const r = await cacheChartForSong(song, getSources().workerUrl, { fresh: true });
       if (r.ok) {
-        cacheBtn.textContent = '✓ cached offline';
-        // cacheChartForSong persists a key it finds — show it.
-        if (!hadKey && song.key) setTimeout(() => refresh(), 1200);
+        cacheBtn.textContent = '✓ refreshed';
+        // Re-render with the new bytes (and any key cacheChartForSong filled).
+        setTimeout(() => refresh(), 800);
       } else {
-        cacheBtn.textContent = 'cache failed';
-        alert(`couldn't cache this chart: ${r.reason}`);
+        cacheBtn.textContent = 'fetch failed';
+        alert(`couldn't fetch this chart: ${r.reason}`);
       }
-      setTimeout(() => { cacheBtn.textContent = 'cache offline'; cacheBtn.disabled = false; }, 2200);
+      setTimeout(() => { cacheBtn.textContent = '↻ refresh chart'; cacheBtn.disabled = false; }, 2200);
     });
-    cacheBtn.title = 'Download this chart into the offline cache so perform mode works with no signal';
+    cacheBtn.title = 'Re-download this chart from Drive, skipping any cached copy (picks up edits), and keep it for offline / perform mode';
     actionBar.appendChild(cacheBtn);
 
     // From-scratch redo even though a doc is linked: a blank paper page in
@@ -5224,7 +5246,9 @@ export async function renderPerformMode(root, setlistId, startSongId) {
           return;
         }
         if (cached?.kind === 'text') {
-          insertChart(mountTextChart(chartWrap, cached.text));
+          const pre = mountTextChart(chartWrap, cached.text);
+          insertChart(pre);
+          refreshTextChartWhenStale(pre, entry.songId, song.chartUrl, cached.text);
         } else if (cached) {
           const url = await chartDisplayUrl(cached);
           // Re-check after the enhance pass — a fast swipe may have moved on.
@@ -5457,7 +5481,9 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     // docs, then embed/plain image as last resorts.
     const cached = await getOfflineChart(annKey, chartUrl);
     if (cached?.kind === 'text') {
-      stage.appendChild(mountTextChart(stage, cached.text));
+      const pre = mountTextChart(stage, cached.text);
+      stage.appendChild(pre);
+      refreshTextChartWhenStale(pre, annKey, chartUrl, cached.text);
     } else if (cached) {
       // Same auto-leveled rendering as the song page — annotating a faint
       // scan is exactly when readability matters most. (Toggle lives on the
