@@ -1831,6 +1831,52 @@ const buildStamp = readBuildStamp();
       align-items: center;
       gap: 0.35rem;
     }
+    /* ⋯ overflow menu in the annotation toolbar (clear, pen mode, scratch
+       page actions) — keeps the phone toolbar to two rows. */
+    .sl-ann-more {
+      position: relative;
+    }
+    .sl-ann-more-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 0.3rem);
+      z-index: 20;
+      min-width: 12rem;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.25rem;
+      padding: 0.3rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    }
+    .sl-ann-more-menu:not([hidden]) {
+      display: flex;
+    }
+    .sl-ann-more-menu .sl-btn {
+      justify-content: flex-start;
+      text-align: left;
+    }
+    #sl-ann-stylus[aria-pressed="true"] {
+      color: var(--accent, var(--text));
+    }
+    /* Phone width: tighter toolbar so tools + actions fit in two rows. */
+    @media (max-width: 480px) {
+      .sl-annotation-toolbar {
+        gap: 0.25rem;
+        padding: 0.4rem 0.5rem;
+      }
+      .sl-annotation-toolbar .sl-ann-controls {
+        gap: 0.25rem !important;
+      }
+      .sl-annotation-toolbar .sl-btn-sm {
+        padding: 0.4rem 0.55rem;
+      }
+      .sl-annotation-toolbar .sl-ann-sep {
+        margin: 0 0.05rem;
+      }
+    }
 
     @media (min-width: 640px) {
       .sl-grid {
