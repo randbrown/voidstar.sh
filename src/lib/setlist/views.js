@@ -5430,7 +5430,10 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
 
   // Draw controls (hidden by default)
   const drawControls = el('div', 'sl-ann-controls');
-  drawControls.style.cssText = 'display:none;align-items:center;gap:0.35rem;flex-wrap:wrap';
+  // flex:1 + min-width:0 lets the controls share the back button's row and
+  // wrap inside themselves (otherwise the whole group wraps below ←, leaving
+  // it alone on an extra toolbar row on phones).
+  drawControls.style.cssText = 'display:none;align-items:center;gap:0.35rem;flex-wrap:wrap;flex:1 1 0;min-width:0';
   drawControls.innerHTML = `
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pan" title="Scroll chart (two fingers also scroll with any tool)">🖐</button>
     <span class="sl-ann-sep"></span>
@@ -5449,9 +5452,44 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     </select>
     <span class="sl-ann-sep"></span>
     <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-undo" title="Undo">↶</button>
-    <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">Clear</button>
     <button class="sl-btn sl-btn-sm sl-btn-primary" id="sl-ann-save">Save</button>
+    <div class="sl-ann-more">
+      <button class="sl-btn sl-btn-sm sl-btn-ghost sl-ann-more-btn" aria-haspopup="true" aria-expanded="false" title="More">⋯</button>
+      <div class="sl-ann-more-menu" hidden>
+        <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-stylus" aria-pressed="false"
+          title="Pen draws; a finger scrolls, selects and moves (palm rejection while the pen is down)">pen mode: off</button>
+        <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">clear all</button>
+      </div>
+    </div>
   `;
+  // Rarely-used actions live behind ⋯ so the phone toolbar stays two rows
+  // instead of three. The menu closes on outside taps and after an item
+  // runs — except items marked data-keep-open, whose label reports progress
+  // (make doc).
+  const moreWrap = drawControls.querySelector('.sl-ann-more');
+  const moreBtn = moreWrap.querySelector('.sl-ann-more-btn');
+  const moreMenu = moreWrap.querySelector('.sl-ann-more-menu');
+  const setMoreOpen = (open) => {
+    moreMenu.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) return;
+    // Right-aligned to ⋯ by default; when ⋯ wraps to the left edge of a
+    // phone toolbar that would hang off-screen, so anchor left instead.
+    moreMenu.style.left = '';
+    moreMenu.style.right = '';
+    if (moreMenu.getBoundingClientRect().left < 8) {
+      moreMenu.style.left = '0';
+      moreMenu.style.right = 'auto';
+    }
+  };
+  moreBtn.addEventListener('click', () => setMoreOpen(moreMenu.hidden));
+  moreMenu.addEventListener('click', (e) => {
+    const item = e.target.closest('button');
+    if (item && !item.dataset.keepOpen) setTimeout(() => setMoreOpen(false), 0);
+  });
+  const closeMoreOnOutside = (e) => { if (!moreWrap.contains(e.target)) setMoreOpen(false); };
+  document.addEventListener('pointerdown', closeMoreOnOutside, true);
+  window.addEventListener('hashchange', () => document.removeEventListener('pointerdown', closeMoreOnOutside, true), { once: true });
   // Pen color: restore the last-used ink as the default and remember every
   // pick (initAnnotationCanvas reads its start color from this input).
   // Scratch has its own memory + fallback: on paper, dark ink is the chart
@@ -5470,7 +5508,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     }
   }
   // Scratch-only controls: grow the page, and export the drawing as a real
-  // chart doc. Created before doneBtn so "done" stays last in the row.
+  // chart doc. Both go at the top of the ⋯ menu.
   let addPageBtn = null;
   let makeDocBtn = null;
   if (isScratch) {
@@ -5479,8 +5517,8 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     makeDocBtn = btn('make doc', 'sl-btn-accent sl-btn-sm', () => makeDocFromScratch());
     makeDocBtn.title = 'Render this page to a chart image in your Drive charts folder';
     makeDocBtn.dataset.slAuth = '1'; // ensureDriveAccess in the tap — gesture renewal must not steal it
-    drawControls.appendChild(addPageBtn);
-    drawControls.appendChild(makeDocBtn);
+    makeDocBtn.dataset.keepOpen = '1'; // its label shows render/upload progress
+    moreMenu.prepend(addPageBtn, makeDocBtn);
   }
   const doneBtn = btn('done', 'sl-btn-ghost sl-btn-sm', () => exitAnnotateMode());
   drawControls.appendChild(doneBtn);
@@ -5625,7 +5663,11 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     canvas.style.pointerEvents = '';
     canvas.style.cursor = 'crosshair';
     if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
-    canvasCtrl = initAnnotationCanvas(canvas, annKey, drawControls, { startBlank });
+    canvasCtrl = initAnnotationCanvas(canvas, annKey, drawControls, {
+      startBlank,
+      onUndoable: (msg, undo) => showUndoToast(msg, undo),
+      onNotice: (msg) => showToast(msg),
+    });
     // Unsaved ink lives only in this canvas — the flag tells app.js's
     // focus-sync refresh() to leave the view alone, same as a mid-typing
     // input (see uiBusyEditing).
@@ -5667,8 +5709,10 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
       drawControls.querySelector('#sl-ann-save')?.click();
       makeDocBtn.textContent = 'rendering page...';
       const blob = await renderStrokesToPngBlob(strokes, {
-        aspect: canvas.height ? canvas.width / canvas.height : scratchAspect,
-        sourceWidth: canvas.width,
+        // CSS-px box, not the DPR-scaled backing store: pen widths are
+        // authored in CSS px (see fitCanvasToBox in annotation.js).
+        aspect: canvas.clientHeight ? canvas.clientWidth / canvas.clientHeight : scratchAspect,
+        sourceWidth: canvas.clientWidth,
       });
       makeDocBtn.textContent = 'uploading...';
       const webViewLink = await createChartImageFile(song, blob);

@@ -1333,8 +1333,50 @@ is stored per stroke, so pre-mapping annotations render at their authored
 size. (Also: `var(--font-mono)` is invalid inside a canvas font string and
 gets silently ignored — that once left all text annotations at the canvas
 default 10px sans-serif, immune to the size picker.) Selected text elements
-get a bottom-right corner handle for continuous drag-resize; `stroke.size`
+get a bottom-right corner handle for continuous drag-resize, plus A−/A+
+step buttons (±15%) in the selection menu for fingertip use; `stroke.size`
 stays the single source of scale and may be fractional.
+
+Text strokes may be **multi-line** (`text` contains `\n`; `(x, y)` is the
+first line's baseline-left, lines stack at 1.15× the font size). Entry and
+editing use an in-page `<textarea>` sheet (`openTextSheet`), not
+`window.prompt()`, which is single-line, with no newline key on Android. With
+the text tool active, tapping an existing text element edits it. New text
+strokes carry `font: 'narrow'` and render in pinned `600 'Roboto Condensed'`
+(shipped by `setlist.astro`'s Google Fonts import), which fits about 40% more
+characters per line than the mono. Strokes without `font` predate this and keep
+JetBrains Mono, so their footprint doesn't change.
+
+### Editor interaction model (mobile)
+
+- **Undo is a snapshot history** (`undoHistory` in `initAnnotationCanvas`):
+  every committed mutation (ink, text, move, resize, pinch, recolor, delete,
+  clear) checkpoints a deep copy first, so ↶ reverts any of them. Deletes
+  also raise a "deleted · undo" toast (`onUndoable` hook → `showUndoToast`).
+  The toast's undo only fires while its snapshot is still the newest entry.
+  `scaleStrokeYs` ("+ page") resets the history, because old snapshots carry
+  the previous y normalization.
+- **Pen mode** ("pen draws, finger edits", the GoodNotes/Notability split)
+  turns on the first time a stylus touches the canvas. It's stored per device
+  in `localStorage['sl-ann-stylus-mode']`, and a stored `'0'` (the user
+  switched it off) suppresses that auto-enable. In pen mode a finger never
+  inks: on an element it grabs it immediately (the long-press session without
+  the wait); on empty space it scrolls. Touches are ignored while the pen is
+  down (palm rejection). The pen landing off a finger-grabbed selection ends
+  that session and draws.
+- **Pinch to resize:** with the select session's first finger on the
+  selected element, a second finger scales it. Text scales its font size;
+  ink scales its geometry about the bbox center. Anywhere else, two fingers
+  still scroll.
+- **Toolbar:** clear-all, pen-mode toggle and the scratch-page actions
+  (+ page / make doc) live in the ⋯ overflow menu, so the phone toolbar is
+  two rows.
+
+Annotation canvases render at `devicePixelRatio` (`fitCanvasToBox`, capped
+at 3× and 16 MP so tall stacked-PDF charts stay within mobile canvas limits).
+All stroke math runs in the logical CSS-px box through the context
+transform. Never normalize against `canvas.width` (the backing store); use the
+box, or `clientWidth` as the scratch export does.
 
 ## Chart rendering on the song page (and how "appearance" works)
 

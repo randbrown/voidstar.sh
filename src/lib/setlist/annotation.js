@@ -25,8 +25,39 @@ async function saveAnnotation(songId, strokes, aspect) {
 // text annotations stuck at the canvas default 10px sans-serif regardless of
 // the chosen size.
 const ANN_TEXT_FONT = "'JetBrains Mono', ui-monospace, monospace";
+// New text strokes default to a condensed face (`font: 'narrow'`) — roughly
+// 40% more characters per line than the mono at the same height, which is
+// what a phone-width chart needs for real stage notes. Weight 600 is pinned
+// and shipped by setlist.astro's Google Fonts import, same determinism rule
+// as above. Strokes without a `font` field predate this and keep the mono,
+// so existing annotations render exactly as authored.
+const ANN_TEXT_FONT_NARROW = "'Roboto Condensed', 'Arial Narrow', sans-serif";
+function annTextFont(stroke, px) {
+  return stroke.font === 'narrow'
+    ? `600 ${px}px ${ANN_TEXT_FONT_NARROW}`
+    : `${px}px ${ANN_TEXT_FONT}`;
+}
+// Line pitch for multi-line text, as a multiple of the font size.
+const ANN_TEXT_LINE_HEIGHT = 1.15;
+function annTextLines(stroke) {
+  return String(stroke.text || '').split('\n');
+}
 function annTextFontPx(stroke, canvas) {
   return (stroke.size * canvas.width) / 200; // stored size in width/200 units
+}
+
+// A canvas only draws a web font once it has loaded, and nothing in the DOM
+// uses the narrow face — so the first paint would fall back to a wider font
+// and never repaint. Resolves once it's ready (immediately if already).
+let narrowFontReady = null;
+function whenNarrowFontReady() {
+  if (!narrowFontReady) {
+    narrowFontReady = (document.fonts?.load
+      ? document.fonts.load(`600 20px ${ANN_TEXT_FONT_NARROW}`)
+      : Promise.resolve()
+    ).catch(() => {});
+  }
+  return narrowFontReady;
 }
 
 // The Fine/Medium/Thick select doubles as pen width and text size, but a
@@ -43,11 +74,40 @@ function textSizeForWidth(w) {
   return TEXT_SIZE_BY_WIDTH[w] || Math.round(w * 3.5);
 }
 
+// Size a CSS-stretched canvas's backing store to the device pixel ratio and
+// return the logical (CSS-px) box every stroke is normalized against. At 1×
+// on a ~3.5-DPR phone the ink — small condensed text especially — renders
+// soft. Stroke math stays in CSS px through the context transform, so pen
+// widths look exactly as before. The ratio is capped by total pixel area so
+// a tall stacked-PDF chart can't exceed mobile canvas limits (it degrades
+// toward the old 1× rather than failing to draw).
+const MAX_CANVAS_PX = 16e6;
+const MAX_CANVAS_SIDE = 16384;
+export function fitCanvasToBox(canvas, ctx, rect) {
+  const w = Math.max(1, rect.width);
+  const h = Math.max(1, rect.height);
+  const dpr = Math.max(1, Math.min(
+    window.devicePixelRatio || 1, 3,
+    Math.sqrt(MAX_CANVAS_PX / (w * h)),
+    MAX_CANVAS_SIDE / Math.max(w, h),
+  ));
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(canvas.width / w, 0, 0, canvas.height / h, 0, 0);
+  return { width: rect.width, height: rect.height };
+}
+
 export function drawStrokeOnCanvas(ctx, canvas, stroke) {
   if (stroke.type === 'text') {
-    ctx.font = `${annTextFontPx(stroke, canvas)}px ${ANN_TEXT_FONT}`;
+    // (x, y) is the FIRST line's baseline-left; later lines stack below it.
+    const px = annTextFontPx(stroke, canvas);
+    ctx.font = annTextFont(stroke, px);
     ctx.fillStyle = stroke.color;
-    ctx.fillText(stroke.text, stroke.x * canvas.width, stroke.y * canvas.height);
+    const x = stroke.x * canvas.width;
+    const y = stroke.y * canvas.height;
+    annTextLines(stroke).forEach((line, i) => {
+      ctx.fillText(line, x, y + i * px * ANN_TEXT_LINE_HEIGHT);
+    });
     return;
   }
 
@@ -109,22 +169,100 @@ export function renderReadonlyAnnotations(canvas, strokes) {
   function redraw() {
     const wrap = canvas.parentElement;
     if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const box = fitCanvasToBox(canvas, ctx, wrap.getBoundingClientRect());
+    ctx.clearRect(0, 0, box.width, box.height);
     for (const s of strokes) {
-      drawStrokeOnCanvas(ctx, canvas, s);
+      drawStrokeOnCanvas(ctx, box, s);
     }
   }
   const ro = new ResizeObserver(redraw);
   if (canvas.parentElement) ro.observe(canvas.parentElement);
   redraw();
+  if (strokes.some(s => s.font === 'narrow')) whenNarrowFontReady().then(redraw);
   return { redraw, destroy: () => ro.disconnect() };
 }
 
-export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = false } = {}) {
+// Multi-line text entry for text annotations. window.prompt() is a
+// single-line field everywhere (Android's has no newline key at all), so this
+// is a small in-page sheet with a <textarea>: the keyboard's Enter key types
+// a newline, and Add/Save commits. Pinned to the top of the viewport so the
+// on-screen keyboard never covers it. Resolves the text, '' when Delete is
+// tapped (callers already treat empty text as "remove the element"), or null
+// on cancel.
+function openTextSheet({ initial = '', title = 'Text', confirmLabel = 'Add', canDelete = false, color, narrow = true } = {}) {
+  return new Promise(resolve => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'sl-ann-textsheet-backdrop';
+    const sheet = document.createElement('div');
+    sheet.className = 'sl-ann-textsheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', title);
+    const ta = document.createElement('textarea');
+    ta.className = 'sl-ann-textsheet-input';
+    ta.rows = 4;
+    ta.value = initial;
+    ta.placeholder = 'Annotation text — Enter for a new line';
+    ta.setAttribute('enterkeyhint', 'enter');
+    ta.autocapitalize = 'sentences';
+    // Preview in the face the stroke will render with; the ink color reads
+    // poorly on the sheet background, so only the font carries over.
+    if (narrow) ta.style.fontFamily = ANN_TEXT_FONT_NARROW;
+    if (color) ta.style.caretColor = color;
+    const row = document.createElement('div');
+    row.className = 'sl-ann-textsheet-actions';
+    const mk = (label, cls, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `sl-btn sl-btn-sm ${cls}`;
+      b.textContent = label;
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const finish = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+      // Plain Enter is a newline; Ctrl/Cmd+Enter commits on a hardware keyboard.
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(ta.value); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    row.append(mk('cancel', 'sl-btn-ghost', () => finish(null)));
+    if (canDelete) row.append(mk('delete', 'sl-btn-danger', () => finish('')));
+    row.append(mk(confirmLabel, 'sl-btn-primary', () => finish(ta.value)));
+    sheet.append(ta, row);
+    backdrop.append(sheet);
+    // Tap outside the sheet = cancel. (pointerdown on the sheet itself must
+    // not bubble into this.)
+    backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop) finish(null); });
+    document.body.appendChild(backdrop);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  });
+}
+
+// Pen mode ("pen draws, finger edits") is a per-device preference: it turns
+// itself on the first time a stylus touches the canvas, and the overflow
+// menu's toggle turns it off/on again.
+const STYLUS_MODE_KEY = 'sl-ann-stylus-mode';
+function readStylusMode() {
+  try { return localStorage.getItem(STYLUS_MODE_KEY); } catch { return null; }
+}
+function writeStylusMode(on) {
+  try { localStorage.setItem(STYLUS_MODE_KEY, on ? '1' : '0'); } catch {}
+}
+
+// onUndoable(msg, undo): optional view hook for a transient "msg · undo"
+// toast after a destructive tap (delete). Without it deletes still land on
+// the undo history, just without the toast.
+// onNotice(msg): optional passive status toast.
+export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = false, onUndoable = null, onNotice = null } = {}) {
   const ctx = canvas.getContext('2d');
+  // Logical (CSS-px) size of the drawing box — strokes normalize against
+  // this, not the DPR-scaled backing store (see fitCanvasToBox).
+  let box = { width: canvas.width, height: canvas.height };
   const ac = new AbortController();
   const { signal } = ac;
   let strokes = [];
@@ -135,7 +273,12 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   // keeps the drawn stroke honest to what the pickers show.
   let color = toolbar.querySelector('.sl-ann-color')?.value || '#ff5e7e';
   let lineWidth = parseInt(toolbar.querySelector('.sl-ann-size')?.value) || 4;
-  let undoStack = [];
+  // Undo history: deep snapshots of `strokes` taken before every committed
+  // mutation (ink, text, move, resize, recolor, delete, clear), so ↶ can
+  // restore any of them, not only a freshly drawn stroke. Capped; stroke
+  // arrays are small.
+  let undoHistory = [];
+  const UNDO_LIMIT = 60;
   // Unsaved-changes flag: set by every committed mutation, cleared by save.
   // The view layer reads it (isDirty) to auto-save when the editor is left
   // by an accidental back gesture / navigation instead of the Save button.
@@ -162,19 +305,33 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   const activePointers = new Map();
   let panGesture = false;
 
+  // ── Pen mode ("pen draws, finger edits") ──
+  // The GoodNotes/Notability split: with a stylus in play, the pen is
+  // always the active tool, and a finger never inks. One finger on an
+  // element selects/drags it (no long-press, no tool switch), and one
+  // finger on empty space scrolls. While the pen is down, touches are
+  // ignored outright, which is palm rejection.
+  let stylusMode = readStylusMode() === '1';
+  let penDown = false;
+  const fingerEdits = (e) => stylusMode && e.pointerType === 'touch';
+
+  // ── Pinch to resize the selection ──
+  // When the first finger landed ON the selected element, a second finger
+  // scales it instead of scrolling. That's text size for text, and geometry
+  // about the bbox center for ink. Anywhere else, two fingers still scroll.
+  let pinch = null;
+
   function resize() {
     const wrap = canvas.parentElement;
     if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    box = fitCanvasToBox(canvas, ctx, wrap.getBoundingClientRect());
     redraw();
   }
 
   function redraw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, box.width, box.height);
     for (const stroke of strokes) {
-      drawStrokeOnCanvas(ctx, canvas, stroke);
+      drawStrokeOnCanvas(ctx, box, stroke);
     }
     if (selectedIndex >= 0 && strokes[selectedIndex]) {
       const b = strokeBBox(strokes[selectedIndex]);
@@ -202,20 +359,22 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (!s || s.type !== 'text') return false;
     const b = strokeBBox(s);
     if (!b) return false;
-    const px = pos.x * canvas.width;
-    const py = pos.y * canvas.height;
+    const px = pos.x * box.width;
+    const py = pos.y * box.height;
     return Math.abs(px - (b.x + b.w)) <= HANDLE_HIT_PX && Math.abs(py - (b.y + b.h)) <= HANDLE_HIT_PX;
   }
 
   // Bounding box of a stroke in canvas pixels (used for select/hit-test).
   function strokeBBox(stroke) {
     if (stroke.type === 'text') {
-      const fontPx = annTextFontPx(stroke, canvas);
-      ctx.font = `${fontPx}px ${ANN_TEXT_FONT}`;
-      const w = ctx.measureText(stroke.text || '').width;
-      const x = stroke.x * canvas.width;
-      const y = stroke.y * canvas.height;
-      return { x: x - 4, y: y - fontPx, w: w + 8, h: fontPx + 8 };
+      const fontPx = annTextFontPx(stroke, box);
+      ctx.font = annTextFont(stroke, fontPx);
+      const lines = annTextLines(stroke);
+      const w = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const x = stroke.x * box.width;
+      const y = stroke.y * box.height;
+      const extra = (lines.length - 1) * fontPx * ANN_TEXT_LINE_HEIGHT;
+      return { x: x - 4, y: y - fontPx, w: w + 8, h: fontPx + extra + 8 };
     }
     const pts = stroke.points;
     if (!pts || !pts.length) return null;
@@ -229,17 +388,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     const stroked = stroke.type === 'highlighter' ? stroke.size * 3 : stroke.size;
     const pad = stroked / 2 + 8;
     return {
-      x: minX * canvas.width - pad,
-      y: minY * canvas.height - pad,
-      w: (maxX - minX) * canvas.width + pad * 2,
-      h: (maxY - minY) * canvas.height + pad * 2,
+      x: minX * box.width - pad,
+      y: minY * box.height - pad,
+      w: (maxX - minX) * box.width + pad * 2,
+      h: (maxY - minY) * box.height + pad * 2,
     };
   }
 
   // Topmost (last-drawn) stroke whose bbox contains the normalized point.
   function hitTest(pos) {
-    const px = pos.x * canvas.width;
-    const py = pos.y * canvas.height;
+    const px = pos.x * box.width;
+    const py = pos.y * box.height;
     for (let i = strokes.length - 1; i >= 0; i--) {
       const b = strokeBBox(strokes[i]);
       if (!b) continue;
@@ -252,6 +411,25 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     return { ...s, points: s.points ? s.points.map(p => ({ x: p.x, y: p.y })) : undefined };
   }
 
+  const snapshot = () => strokes.map(cloneStroke);
+  // Record the pre-mutation state (or a snapshot captured earlier, e.g. at
+  // the start of a drag). Returns it so a toast can check it's still the
+  // newest entry before undoing.
+  function checkpoint(snap = snapshot()) {
+    undoHistory.push(snap);
+    if (undoHistory.length > UNDO_LIMIT) undoHistory.shift();
+    dirty = true;
+    return snap;
+  }
+  function undo() {
+    if (!undoHistory.length) return;
+    clearSelection();
+    endSelectSession();
+    strokes = undoHistory.pop();
+    dirty = true;
+    redraw();
+  }
+
   // Translate a stroke by a normalized delta, relative to a pristine copy.
   function applyTranslate(stroke, orig, dx, dy) {
     if (stroke.type === 'text') {
@@ -260,6 +438,24 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     } else if (orig.points) {
       stroke.points = orig.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     }
+  }
+
+  // Scale a stroke by k relative to a pristine copy: text grows its font
+  // (same 1..48 clamp as the corner handle), ink scales about its bbox
+  // center. Normalized x and y scale by the same k, which is uniform in
+  // pixels too, so shapes don't skew.
+  function applyScale(stroke, base, k) {
+    if (stroke.type === 'text') {
+      stroke.size = Math.min(48, Math.max(1, base.size * k));
+      return;
+    }
+    if (!base.points?.length) return;
+    k = Math.min(5, Math.max(0.2, k));
+    const xs = base.points.map(p => p.x);
+    const ys = base.points.map(p => p.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    stroke.points = base.points.map(p => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
   }
 
   function clearSelection() {
@@ -296,6 +492,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   }
 
   function startStroke(e) {
+    if (e.pointerType === 'pen') {
+      penDown = true;
+      // First stylus contact on this device turns pen mode on (unless the
+      // user has explicitly switched it off before).
+      if (!stylusMode && readStylusMode() === null) {
+        setStylusMode(true);
+        onNotice?.('pen mode on: pen draws, finger scrolls & moves (⋯ to turn off)');
+      }
+    } else if (penDown && e.pointerType === 'touch') {
+      return; // palm rejection: no finger input while the pen is down
+    }
     // A new primary pointer means every finger has lifted, so anything still
     // tracked is a stray whose pointerup/pointercancel the browser never
     // delivered (mobile Chrome drops a captured touch stream without either
@@ -309,6 +516,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       panGesture = false;
     }
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!panGesture && !pinch && activePointers.size === 2 && tool === 'select' &&
+        selDrag && !selDrag.resize && selectedIndex >= 0) {
+      // First finger is holding the selection → this is a pinch on it.
+      const [a, b] = [...activePointers.values()];
+      pinch = {
+        d0: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
+        base: cloneStroke(strokes[selectedIndex]),
+      };
+      return;
+    }
+    if (pinch) return; // a third finger during a pinch is ignored
     if (!panGesture && activePointers.size >= 2) {
       // Second finger down = scroll intent. The first finger's partial
       // stroke (or armed text tap / selection drag) is rolled back, not
@@ -322,18 +540,45 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     e.preventDefault();
     const pos = getPos(e);
 
+    if (fingerEdits(e)) {
+      // Pen mode: a finger never inks. On an element it grabs it right away
+      // (the long-press session, minus the wait); on empty space it scrolls.
+      const onHandle = tool === 'select' && onResizeHandle(pos);
+      const idx = onHandle ? selectedIndex : hitTest(pos);
+      if (idx >= 0) {
+        if (tool !== 'select') { selReturnTool = tool; setTool('select'); }
+        selectedIndex = idx;
+        selDrag = { startPos: pos, orig: cloneStroke(strokes[idx]), before: snapshot(), moved: false, resize: onHandle };
+        redraw();
+        updateSelMenu();
+        return;
+      }
+      if (tool === 'select' && selectedIndex >= 0) { clearSelection(); endSelectSession(); }
+      panGesture = true;
+      return;
+    }
+    // Pen mode: the pen always inks. If a finger grabbed something (a
+    // hijacked select session), the pen landing off that selection ends the
+    // session and draws straight away instead of spending the touch on a
+    // deselect.
+    if (stylusMode && e.pointerType === 'pen' && tool === 'select' && selReturnTool &&
+        !onResizeHandle(pos) && hitTest(pos) !== selectedIndex) {
+      clearSelection();
+      endSelectSession();
+    }
+
     if (tool === 'select') {
       // The resize handle of an already-selected text element wins over
       // hit-testing — it sits outside the glyphs, so hitTest alone would
       // read the grab as a deselect.
       if (onResizeHandle(pos)) {
-        selDrag = { startPos: pos, orig: cloneStroke(strokes[selectedIndex]), moved: false, resize: true };
+        selDrag = { startPos: pos, orig: cloneStroke(strokes[selectedIndex]), before: snapshot(), moved: false, resize: true };
         return;
       }
       const idx = hitTest(pos);
       selectedIndex = idx;
       selDrag = idx >= 0
-        ? { startPos: pos, orig: cloneStroke(strokes[idx]), moved: false }
+        ? { startPos: pos, orig: cloneStroke(strokes[idx]), before: snapshot(), moved: false }
         : null;
       redraw();
       updateSelMenu();
@@ -354,6 +599,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (tool === 'eraser') {
       const threshold = 0.03;
       const before = strokes.length;
+      const snap = snapshot();
       strokes = strokes.filter(s => {
         if (s.type === 'text') {
           return Math.abs(s.x - pos.x) > threshold || Math.abs(s.y - pos.y) > threshold;
@@ -363,7 +609,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
           Math.abs(p.x - pos.x) < threshold && Math.abs(p.y - pos.y) < threshold
         );
       });
-      if (strokes.length !== before) { undoStack = []; dirty = true; }
+      if (strokes.length !== before) checkpoint(snap);
       redraw();
       return;
     }
@@ -387,7 +633,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       selReturnTool = tool;
       setTool('select');
       selectedIndex = idx;
-      selDrag = { startPos: pos, orig: cloneStroke(strokes[idx]), moved: false };
+      selDrag = { startPos: pos, orig: cloneStroke(strokes[idx]), before: snapshot(), moved: false };
       redraw();
       updateSelMenu();
       try { navigator.vibrate?.(15); } catch {}
@@ -398,11 +644,25 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     // Keep every tracked finger's last position current, so the moment a
     // second finger lands the scroll deltas start from here (no jump).
     const tracked = activePointers.get(e.pointerId);
-    if (tracked) {
+    // Untracked = hovering (mouse, S Pen hover) or a palm-rejected touch:
+    // neither may drive a stroke or a selection drag.
+    if (!tracked) return;
+    {
       const dx = e.clientX - tracked.x;
       const dy = e.clientY - tracked.y;
       tracked.x = e.clientX;
       tracked.y = e.clientY;
+      if (pinch) {
+        if (activePointers.size >= 2 && selectedIndex >= 0) {
+          const [a, b] = [...activePointers.values()];
+          const k = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0;
+          applyScale(strokes[selectedIndex], pinch.base, k);
+          if (selDrag) selDrag.moved = true;
+          redraw();
+          updateSelMenu();
+        }
+        return;
+      }
       if (panGesture) {
         // Each finger contributes its share of the centroid's movement, so
         // two fingers moving together scroll at finger speed.
@@ -420,10 +680,10 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       if (selDrag.resize) {
         // Scale the text around its anchor (baseline-left): size follows the
         // handle's distance from the anchor relative to where the drag began.
-        const ax = selDrag.orig.x * canvas.width;
-        const ay = selDrag.orig.y * canvas.height;
-        const d0 = Math.hypot(selDrag.startPos.x * canvas.width - ax, selDrag.startPos.y * canvas.height - ay);
-        const d1 = Math.hypot(pos.x * canvas.width - ax, pos.y * canvas.height - ay);
+        const ax = selDrag.orig.x * box.width;
+        const ay = selDrag.orig.y * box.height;
+        const d0 = Math.hypot(selDrag.startPos.x * box.width - ax, selDrag.startPos.y * box.height - ay);
+        const d1 = Math.hypot(pos.x * box.width - ax, pos.y * box.height - ay);
         if (d0 > 4) {
           // Cap at 24% of chart width — room for a huge scrawled key change
           // (the mapped "Thick" is 11%) without an accidental screen-filler.
@@ -460,11 +720,22 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     }
     currentStroke.points.push(pos);
     redraw();
-    drawStrokeOnCanvas(ctx, canvas, currentStroke);
+    drawStrokeOnCanvas(ctx, box, currentStroke);
   }
 
   function endStroke(e) {
-    activePointers.delete(e.pointerId);
+    if (e.pointerType === 'pen' && e.type !== 'pointerleave') penDown = false;
+    // Hover leaving the canvas, or a palm-rejected touch lifting — neither
+    // started anything, so neither may end the live gesture.
+    if (!activePointers.delete(e.pointerId)) return;
+    if (pinch) {
+      if (activePointers.size === 0) {
+        pinch = null;
+        if (selDrag?.moved) checkpoint(selDrag.before);
+        selDrag = null;
+      }
+      return;
+    }
     if (panGesture) {
       // The gesture stays a scroll until every finger lifts — a lingering
       // finger must not turn back into ink mid-drag.
@@ -482,18 +753,24 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       // Let go of the touch's implicit capture and let the gesture fully
       // finish before the modal opens — see the pointerdown comment.
       try { canvas.releasePointerCapture(e.pointerId); } catch {}
-      setTimeout(() => {
-        const text = prompt('Annotation text:');
-        if (!text) return;
-        strokes.push({ type: 'text', text, x: at.x, y: at.y, color, size: textSizeForWidth(lineWidth) });
-        undoStack = [];
-        dirty = true;
+      // Tapping an existing text element with the text tool edits it rather
+      // than stacking a new one on top — no detour through select mode.
+      const hit = hitTest(at);
+      if (hit >= 0 && strokes[hit].type === 'text') {
+        setTimeout(() => editTextStroke(hit), 0);
+        return;
+      }
+      setTimeout(async () => {
+        const text = await openTextSheet({ color });
+        if (!text || !text.trim()) return;
+        checkpoint();
+        strokes.push({ type: 'text', text, font: 'narrow', x: at.x, y: at.y, color, size: textSizeForWidth(lineWidth) });
         redraw();
       }, 0);
       return;
     }
     if (tool === 'select') {
-      if (selDrag?.moved) { undoStack = []; dirty = true; }
+      if (selDrag?.moved) checkpoint(selDrag.before);
       selDrag = null;
       // A tap that landed on empty canvas (deselect) closes a long-press
       // selection session — give the hijacked drawing tool back.
@@ -503,9 +780,8 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (!currentStroke) return;
     e.preventDefault();
     if (currentStroke.points.length >= 2) {
+      checkpoint();
       strokes.push(currentStroke);
-      undoStack = [];
-      dirty = true;
     }
     currentStroke = null;
     redraw();
@@ -518,9 +794,11 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   // second finger turns the gesture into a scroll.
   function cancelStroke(e) {
     if (e) {
-      activePointers.delete(e.pointerId);
+      if (e.pointerType === 'pen') penDown = false;
+      if (!activePointers.delete(e.pointerId)) return; // untracked: nothing live
       if (activePointers.size === 0) panGesture = false;
     }
+    pinch = null;
     cancelLongPress();
     pendingText = null;
     currentStroke = null;
@@ -562,29 +840,31 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   toolbar.querySelector('[data-tool="pen"]')?.classList.add('sl-btn-primary');
 
   const colorInput = toolbar.querySelector('.sl-ann-color');
+  // The picker fires `input` continuously while dragging; one undo entry
+  // per pick (closed by `change`), not one per intermediate hue.
+  let recolorSnap = null;
   if (colorInput) colorInput.addEventListener('input', (e) => {
     color = e.target.value;
     // While an element is selected, the color picker recolors it in place.
     if (tool === 'select' && selectedIndex >= 0) {
+      if (!recolorSnap) recolorSnap = checkpoint();
       strokes[selectedIndex].color = color;
-      undoStack = [];
-      dirty = true;
       redraw();
     }
   }, { signal });
+  if (colorInput) colorInput.addEventListener('change', () => { recolorSnap = null; }, { signal });
 
   const sizeSelect = toolbar.querySelector('.sl-ann-size');
   if (sizeSelect) sizeSelect.addEventListener('change', (e) => {
     lineWidth = parseInt(e.target.value);
     if (tool === 'select' && selectedIndex >= 0) {
+      checkpoint();
       // Text sizes live on the mapped-up scale (see textSizeForWidth) —
       // assigning the raw pen width here would shrink a selected text
       // stroke back to the old illegible default.
       strokes[selectedIndex].size = strokes[selectedIndex].type === 'text'
         ? textSizeForWidth(lineWidth)
         : lineWidth;
-      undoStack = [];
-      dirty = true;
       redraw();
       updateSelMenu();
     }
@@ -602,19 +882,28 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     return b;
   };
   const selEditBtn = makeSelBtn('sl-btn-xs', 'edit text');
+  // Step resize: the corner handle is a fiddly target under a fingertip, so
+  // text also gets one-tap smaller/bigger steps (±15%, same 1..48 clamp).
+  const selShrinkBtn = makeSelBtn('sl-btn-xs', 'A−');
+  selShrinkBtn.title = 'Smaller text';
+  const selGrowBtn = makeSelBtn('sl-btn-xs', 'A+');
+  selGrowBtn.title = 'Bigger text';
   const selDelBtn = makeSelBtn('sl-btn-xs sl-btn-danger', 'delete');
   const selCloseBtn = makeSelBtn('sl-btn-xs sl-btn-ghost', '×');
   selCloseBtn.title = 'Deselect';
-  selMenu.append(selEditBtn, selDelBtn, selCloseBtn);
+  selMenu.append(selEditBtn, selShrinkBtn, selGrowBtn, selDelBtn, selCloseBtn);
   if (selWrap) selWrap.appendChild(selMenu);
 
   function updateSelMenu() {
     const s = selectedIndex >= 0 ? strokes[selectedIndex] : null;
     const b = s ? strokeBBox(s) : null;
     if (!s || !b) { selMenu.style.display = 'none'; return; }
-    selEditBtn.style.display = s.type === 'text' ? '' : 'none';
+    const isText = s.type === 'text';
+    selEditBtn.style.display = isText ? '' : 'none';
+    selShrinkBtn.style.display = isText ? '' : 'none';
+    selGrowBtn.style.display = isText ? '' : 'none';
     selMenu.style.display = 'flex';
-    const maxLeft = Math.max(2, canvas.width - selMenu.offsetWidth - 2);
+    const maxLeft = Math.max(2, box.width - selMenu.offsetWidth - 2);
     selMenu.style.left = Math.min(Math.max(2, b.x), maxLeft) + 'px';
     // Above the selection; flip below when the element sits too close to the
     // top — clamping would park the menu on top of the element (and the
@@ -622,37 +911,58 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     const yAbove = b.y - selMenu.offsetHeight - 6;
     const top = yAbove >= 2
       ? yAbove
-      : Math.min(b.y + b.h + 6, canvas.height - selMenu.offsetHeight - 2);
+      : Math.min(b.y + b.h + 6, box.height - selMenu.offsetHeight - 2);
     selMenu.style.top = Math.max(2, top) + 'px';
   }
 
-  selEditBtn.addEventListener('click', () => {
-    if (selectedIndex < 0) return;
-    const s = strokes[selectedIndex];
-    if (s.type !== 'text') return;
-    const text = prompt('Edit annotation text:', s.text);
-    if (text === null) return;
+  // Edit a text element in the multi-line sheet; emptying it (or Delete)
+  // removes the element. Shared by the selection menu and text-tool taps.
+  async function editTextStroke(idx) {
+    const s = strokes[idx];
+    if (!s || s.type !== 'text') return;
+    const text = await openTextSheet({
+      initial: s.text, title: 'Edit text', confirmLabel: 'Save', canDelete: true,
+      color: s.color, narrow: s.font === 'narrow',
+    });
+    if (text === null || strokes[idx] !== s || text === s.text) return;
+    const snap = checkpoint();
     if (text.trim() === '') {
-      strokes.splice(selectedIndex, 1);
-      selectedIndex = -1;
+      strokes.splice(idx, 1);
+      if (selectedIndex === idx) selectedIndex = -1;
+      else if (selectedIndex > idx) selectedIndex--;
+      offerUndo('text deleted', snap);
     } else {
       s.text = text;
     }
-    undoStack = [];
-    dirty = true;
     redraw();
     updateSelMenu();
     // Emptying the text deleted the element — that ends the session.
     if (selectedIndex < 0) endSelectSession();
+  }
+
+  selEditBtn.addEventListener('click', () => {
+    if (selectedIndex >= 0) editTextStroke(selectedIndex);
   }, { signal });
+
+  const stepTextSize = (f) => {
+    const s = selectedIndex >= 0 ? strokes[selectedIndex] : null;
+    if (!s || s.type !== 'text') return;
+    checkpoint();
+    s.size = Math.min(48, Math.max(1, s.size * f));
+    redraw();
+    updateSelMenu();
+  };
+  selShrinkBtn.addEventListener('click', () => stepTextSize(1 / 1.15), { signal });
+  selGrowBtn.addEventListener('click', () => stepTextSize(1.15), { signal });
 
   selDelBtn.addEventListener('click', () => {
     if (selectedIndex < 0) return;
+    const snap = checkpoint();
+    const kind = strokes[selectedIndex].type === 'text' ? 'text' : 'ink';
     strokes.splice(selectedIndex, 1);
     selectedIndex = -1;
     selDrag = null;
-    undoStack = [];
-    dirty = true;
+    offerUndo(`${kind} deleted`, snap);
     redraw();
     updateSelMenu();
     endSelectSession();
@@ -660,27 +970,58 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
 
   selCloseBtn.addEventListener('click', () => { clearSelection(); endSelectSession(); }, { signal });
 
-  toolbar.querySelector('#sl-ann-undo')?.addEventListener('click', () => {
-    if (strokes.length) {
-      undoStack.push(strokes.pop());
-      dirty = true;
+  // Toast-driven undo for destructive taps. It only fires while `snap` is
+  // still the newest history entry — once anything else has been done, the
+  // toast's undo would revert that instead, so it becomes a no-op (↶ still
+  // walks back through everything).
+  function offerUndo(msg, snap) {
+    onUndoable?.(msg, () => {
+      if (undoHistory[undoHistory.length - 1] === snap) undo();
+    });
+  }
+
+  toolbar.querySelector('#sl-ann-undo')?.addEventListener('click', undo, { signal });
+
+  toolbar.querySelector('#sl-ann-clear')?.addEventListener('click', () => {
+    if (strokes.length && confirm('Clear all annotations? (↶ undo restores them)')) {
+      clearSelection();
+      endSelectSession();
+      checkpoint();
+      strokes = [];
       redraw();
     }
   }, { signal });
 
-  toolbar.querySelector('#sl-ann-clear')?.addEventListener('click', () => {
-    if (strokes.length && confirm('Clear all annotations?')) {
-      undoStack = [...strokes];
-      strokes = [];
-      dirty = true;
-      redraw();
-    }
-  }, { signal });
+  // Pen mode toggle (lives in the view's overflow menu). Its label shows
+  // the current state.
+  const stylusToggle = toolbar.querySelector('#sl-ann-stylus');
+  function syncStylusToggle() {
+    if (!stylusToggle) return;
+    stylusToggle.textContent = stylusMode ? '✓ pen mode: finger scrolls' : 'pen mode: off';
+    stylusToggle.setAttribute('aria-pressed', stylusMode ? 'true' : 'false');
+  }
+  // Persists the choice — only on a real decision (first stylus contact or
+  // a toggle tap). Never at init: a stored '0' means "the user turned it
+  // off" and suppresses the auto-enable.
+  function setStylusMode(on) {
+    stylusMode = on;
+    writeStylusMode(on);
+    syncStylusToggle();
+  }
+  syncStylusToggle();
+  if (stylusToggle) {
+    stylusToggle.addEventListener('click', () => {
+      setStylusMode(!stylusMode);
+      onNotice?.(stylusMode
+        ? 'pen mode on: pen draws, finger scrolls & moves'
+        : 'pen mode off: finger draws, two fingers scroll');
+    }, { signal });
+  }
 
   // Shared by the Save button and the view layer's auto-save (accidental
   // back gesture / navigation with unsaved ink — see renderAnnotation).
   async function persist() {
-    const aspect = canvas.height ? canvas.width / canvas.height : null;
+    const aspect = box.height ? box.width / box.height : null;
     await saveAnnotation(songId, strokes, aspect);
     dirty = false;
   }
@@ -705,6 +1046,9 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       redraw();
     }
   });
+  // New text defaults to the narrow face — warm it up so the first text
+  // drop (and any loaded narrow text) paints in it, not a fallback.
+  whenNarrowFontReady().then(() => { if (!signal.aborted) { redraw(); updateSelMenu(); } });
 
   window.addEventListener('resize', resize, { signal });
   // Also track the box itself: its aspect-ratio can change without a window
@@ -732,7 +1076,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
         if (s.type === 'text') s.y *= f;
         else if (s.points) for (const p of s.points) p.y *= f;
       }
-      undoStack = []; // popped strokes would carry the old normalization
+      undoHistory = []; // snapshots would carry the old normalization
       dirty = true;
       redraw();
     },
