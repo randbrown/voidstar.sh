@@ -33,7 +33,7 @@ const buildStamp = readBuildStamp();
   <link rel="apple-touch-icon" href="/icon-setlist-maskable-512.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap" />
+  <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Roboto+Condensed:wght@600&family=VT323&display=swap" />
   <!-- Setlist uses its own manifest so installing from this page anchors
        start_url to /lab/setlist (the default manifest's start_url is /
        so installs from that page would always boot to home). Installing
@@ -1502,6 +1502,52 @@ const buildStamp = readBuildStamp();
       border: 1px solid var(--border);
       border-radius: 6px;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+    }
+    /* Multi-line text entry for text annotations (replaces window.prompt,
+       which is single-line). Top-anchored so the phone keyboard, which
+       rises from the bottom, never covers the field or its buttons. */
+    .sl-ann-textsheet-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: max(0.5rem, env(safe-area-inset-top)) 0.5rem 0.5rem;
+    }
+    .sl-ann-textsheet {
+      width: 100%;
+      max-width: 34rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      padding: 0.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    }
+    .sl-ann-textsheet-input {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 6.5rem;
+      max-height: 40vh;
+      resize: vertical;
+      padding: 0.5rem;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 1.05rem; /* ≥16px: keeps mobile browsers from zooming on focus */
+      line-height: 1.25;
+      color: var(--text);
+      background: var(--void-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .sl-ann-textsheet-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.4rem;
     }
 
     /* ── Timecode tracker ── */

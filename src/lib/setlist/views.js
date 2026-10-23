@@ -5667,8 +5667,10 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
       drawControls.querySelector('#sl-ann-save')?.click();
       makeDocBtn.textContent = 'rendering page...';
       const blob = await renderStrokesToPngBlob(strokes, {
-        aspect: canvas.height ? canvas.width / canvas.height : scratchAspect,
-        sourceWidth: canvas.width,
+        // CSS-px box, not the DPR-scaled backing store: pen widths are
+        // authored in CSS px (see fitCanvasToBox in annotation.js).
+        aspect: canvas.clientHeight ? canvas.clientWidth / canvas.clientHeight : scratchAspect,
+        sourceWidth: canvas.clientWidth,
       });
       makeDocBtn.textContent = 'uploading...';
       const webViewLink = await createChartImageFile(song, blob);

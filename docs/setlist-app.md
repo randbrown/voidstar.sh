@@ -1333,8 +1333,25 @@ is stored per stroke, so pre-mapping annotations render at their authored
 size. (Also: `var(--font-mono)` is invalid inside a canvas font string and
 gets silently ignored — that once left all text annotations at the canvas
 default 10px sans-serif, immune to the size picker.) Selected text elements
-get a bottom-right corner handle for continuous drag-resize; `stroke.size`
+get a bottom-right corner handle for continuous drag-resize, plus A−/A+
+step buttons (±15%) in the selection menu for fingertip use; `stroke.size`
 stays the single source of scale and may be fractional.
+
+Text strokes may be **multi-line** (`text` contains `\n`; `(x, y)` is the
+first line's baseline-left, lines stack at 1.15× the font size). Entry and
+editing use an in-page `<textarea>` sheet (`openTextSheet`), not
+`window.prompt()`, which is single-line, with no newline key on Android. With
+the text tool active, tapping an existing text element edits it. New text
+strokes carry `font: 'narrow'` and render in pinned `600 'Roboto Condensed'`
+(shipped by `setlist.astro`'s Google Fonts import), which fits about 40% more
+characters per line than the mono. Strokes without `font` predate this and keep
+JetBrains Mono, so their footprint doesn't change.
+
+Annotation canvases render at `devicePixelRatio` (`fitCanvasToBox`, capped
+at 3× and 16 MP so tall stacked-PDF charts stay within mobile canvas limits).
+All stroke math runs in the logical CSS-px box through the context
+transform. Never normalize against `canvas.width` (the backing store); use the
+box, or `clientWidth` as the scratch export does.
 
 ## Chart rendering on the song page (and how "appearance" works)
 
