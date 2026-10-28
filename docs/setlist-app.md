@@ -136,6 +136,27 @@ the incoming one), and the same two-sided cues in perform mode; toggled by
 hand via the `»` button on setlist-edit rows. The marker travels with the
 song through reorders (it always points at whatever now follows it).
 
+### Arranging sets (setlist edit)
+
+`↕ reorder` on the edit page unlocks the `⠿` drag handles. A song drags
+within its set **or into another set** (`setupSetsDrag` in `views.js`): the
+row follows the pointer and re-slots into whichever set's row container is
+nearest the pointer — an empty set shows a dashed drop zone — and the page
+auto-scrolls near the viewport edges (the top band starts under the sticky
+top bar; auto-scroll only arms once the finger has moved ~20 px, so grabbing a
+row near an edge doesn't scroll by itself). Only the DOM moves during the
+drag; on release the DOM order is written back into `sl.sets` and the numbers
+and per-set counts repaint **in place** (no `refresh()`, so the scroll
+position holds).
+
+Moving the **cutoff between sets** has its own control: in reorder mode a
+`set break` bar sits under every set but the last, with `↓ last song to
+<next set>` / `↑ first of <next set> here` — one song per tap, either
+direction, no long drag on a phone. Every drag and nudge is one entry on the
+edit page's `↶ undo` stack. Reorder mode itself is kept in the same
+module-scope state as the undo stack, so a `refresh()` (undo, remove, add)
+doesn't drop you out of it.
+
 The setlist view also surfaces the gig's **playlist links** as a tappable
 chip row under the meta line — the three reference URLs
 (`spotifyUrl`/`bandcampUrl`/`soundcloudUrl`) plus every `setlist.playlists`

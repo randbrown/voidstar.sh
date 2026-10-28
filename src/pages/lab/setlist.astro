@@ -1661,6 +1661,33 @@ const buildStamp = readBuildStamp();
       display: flex;
       flex-direction: column;
     }
+    /* An empty set still has to be a drop target while reordering. */
+    .sl-reorder-on .sl-drag-container:empty {
+      min-height: 2.5rem;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius, 6px);
+    }
+    /* Set-break nudge bar (reorder mode only): shift the cutoff between this
+       set and the next one song per tap. */
+    .sl-set-break { display: none; }
+    .sl-reorder-on .sl-set-break {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 0.75rem;
+      padding-top: 0.5rem;
+      border-top: 2px dashed var(--border);
+    }
+    .sl-set-break-label {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-right: auto;
+    }
+    .sl-set-break button:disabled { opacity: 0.4; }
 
     /* ── Song link in edit mode ── */
     .sl-edit-song-link {

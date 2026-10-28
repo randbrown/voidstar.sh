@@ -1414,9 +1414,11 @@ export async function renderSetlistEdit(root, setlistId) {
   const bar = topBar('edit: ' + sl.name, `#setlist/${sl.id}`);
 
   if (!_setlistEditUndo || _setlistEditUndo.id !== setlistId) {
-    _setlistEditUndo = { id: setlistId, stack: [] };
+    _setlistEditUndo = { id: setlistId, stack: [], reorder: false };
   }
-  let reorderEnabled = false;
+  // Reorder mode rides the module-scope state too, so an undo / remove / set
+  // break nudge (each a refresh()) doesn't drop you out of it mid-arrange.
+  let reorderEnabled = !!_setlistEditUndo.reorder;
 
   const snapshotSets = () => sl.sets.map(s => ({ name: s.name, songIds: [...s.songIds] }));
   const pushUndo = (snap) => { _setlistEditUndo.stack.push(snap || snapshotSets()); updateUndoBtn(); };
@@ -1429,11 +1431,16 @@ export async function renderSetlistEdit(root, setlistId) {
   const editActions = el('div', 'sl-actions');
   const reorderBtn = btn('↕ reorder', 'sl-btn-ghost sl-btn-sm', () => {
     reorderEnabled = !reorderEnabled;
+    _setlistEditUndo.reorder = reorderEnabled;
     root.classList.toggle('sl-reorder-on', reorderEnabled);
     reorderBtn.classList.toggle('sl-btn-active', reorderEnabled);
     reorderBtn.innerHTML = reorderEnabled ? '✓ done' : '↕ reorder';
   });
-  reorderBtn.title = 'Unlock drag-to-reorder';
+  reorderBtn.title = 'Unlock drag-to-reorder (drag songs within or between sets)';
+  if (reorderEnabled) {
+    reorderBtn.classList.add('sl-btn-active');
+    reorderBtn.innerHTML = '✓ done';
+  }
   const undoBtn = btn('↶ undo', 'sl-btn-ghost sl-btn-sm', async () => {
     const prev = _setlistEditUndo.stack.pop();
     if (!prev) return;
@@ -1446,7 +1453,7 @@ export async function renderSetlistEdit(root, setlistId) {
   if (isGdriveBackupEnabled() || needsReconnect()) editActions.appendChild(syncNowButton());
   appendNavShortcuts(editActions);
   bar.appendChild(editActions);
-  root.classList.remove('sl-reorder-on');
+  root.classList.toggle('sl-reorder-on', reorderEnabled);
 
   root.appendChild(bar);
   updateUndoBtn();
@@ -2067,17 +2074,57 @@ export async function renderSetlistEdit(root, setlistId) {
   }));
   root.appendChild(importSection);
 
-  // Songs per set (with drag reorder)
+  // Songs per set. In reorder mode a song drags within its set or into
+  // another one (setupSetsDrag), and the bar under each set nudges the set
+  // break one song at a time — the quick way to move the cutoff without a
+  // long drag on a phone.
+  const setContainers = [];
+  const setCounts = [];
+  const breakBtns = [];
+  // Ids the rows don't render (a song record that's gone missing) — kept on
+  // their set when the DOM order is written back, rather than silently dropped.
+  const unrendered = sl.sets.map(() => []);
+
+  // Write the DOM's running order back into sl.sets (mutating each set's
+  // songIds, so the per-set closures below stay valid) and repaint the
+  // numbers / counts / nudge buttons in place — no refresh(), so neither the
+  // scroll position nor reorder mode moves.
+  const syncSetsFromDom = () => {
+    setContainers.forEach((c, si) => {
+      const rows = [...c.querySelectorAll('[data-song-id]')];
+      sl.sets[si].songIds = [...rows.map((r) => r.dataset.songId), ...unrendered[si]];
+      rows.forEach((r, i) => {
+        const num = r.querySelector('.sl-song-num');
+        if (num) num.textContent = i + 1;
+      });
+      setCounts[si].textContent = `(${sl.sets[si].songIds.length} songs)`;
+    });
+    breakBtns.forEach(({ si, down, up }) => {
+      down.disabled = !setContainers[si].querySelector('[data-song-id]');
+      up.disabled = !setContainers[si + 1].querySelector('[data-song-id]');
+    });
+  };
+  const commitDomOrder = async (beforeSnap) => {
+    const before = beforeSnap.map((x) => x.songIds.join('|')).join('||');
+    syncSetsFromDom();
+    if (sl.sets.map((x) => x.songIds.join('|')).join('||') === before) return;
+    pushUndo(beforeSnap);
+    await store.putSetlist(sl);
+  };
+
   for (let si = 0; si < sl.sets.length; si++) {
     const set = sl.sets[si];
     const section = el('div', 'sl-section');
-    section.innerHTML = `<div class="sl-section-title">${set.name} <span class="sl-dim">(${set.songIds.length} songs)</span></div>`;
+    section.innerHTML = `<div class="sl-section-title">${esc(set.name)} <span class="sl-dim">(${set.songIds.length} songs)</span></div>`;
+    setCounts.push(section.querySelector('.sl-dim'));
 
     const rowContainer = el('div', 'sl-drag-container');
+    rowContainer.dataset.setIndex = si;
+    setContainers.push(rowContainer);
 
     for (let i = 0; i < set.songIds.length; i++) {
       const song = await store.getSong(set.songIds[i]);
-      if (!song) continue;
+      if (!song) { unrendered[si].push(set.songIds[i]); continue; }
       const row = el('div', 'sl-edit-row');
       row.dataset.songId = song.id;
       row.innerHTML = `<span class="sl-drag-handle" title="Drag to reorder">⠿</span><span class="sl-song-num">${i + 1}</span><span>${esc(song.title)}</span>`;
@@ -2105,7 +2152,9 @@ export async function renderSetlistEdit(root, setlistId) {
       row.appendChild(songLink);
       const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', async () => {
         pushUndo();
-        set.songIds.splice(set.songIds.indexOf(song.id), 1);
+        // The row may have been dragged into another set since render.
+        const owner = sl.sets[+row.parentElement.dataset.setIndex] || set;
+        owner.songIds.splice(owner.songIds.indexOf(song.id), 1);
         await store.putSetlist(sl);
         refresh();
       });
@@ -2114,10 +2163,6 @@ export async function renderSetlistEdit(root, setlistId) {
     }
 
     section.appendChild(rowContainer);
-    setupDragReorder(rowContainer, set, sl, {
-      isEnabled: () => reorderEnabled,
-      onCommit: (snap) => pushUndo(snap),
-    });
 
     section.appendChild(btn('+ add song', 'sl-btn-sm', async () => {
       const allSongs = await store.getAllSongs();
@@ -2133,8 +2178,45 @@ export async function renderSetlistEdit(root, setlistId) {
       await store.putSetlist(sl);
       refresh();
     }));
+
+    // Set-break nudge (reorder mode only): shift the cutoff between this set
+    // and the next by one song per tap, in either direction.
+    if (si < sl.sets.length - 1) {
+      const next = sl.sets[si + 1];
+      const breakBar = el('div', 'sl-set-break');
+      breakBar.appendChild(el('span', 'sl-set-break-label', 'set break'));
+      const down = btn(`↓ last song to ${esc(next.name)}`, 'sl-btn-ghost sl-btn-xs', async () => {
+        const row = [...setContainers[si].querySelectorAll('[data-song-id]')].pop();
+        if (!row) return;
+        const snap = snapshotSets();
+        setContainers[si + 1].prepend(row);
+        await commitDomOrder(snap);
+      });
+      down.title = `Move the break up: the last song of ${set.name} opens ${next.name}`;
+      const up = btn(`↑ first of ${esc(next.name)} here`, 'sl-btn-ghost sl-btn-xs', async () => {
+        const row = setContainers[si + 1].querySelector('[data-song-id]');
+        if (!row) return;
+        const snap = snapshotSets();
+        setContainers[si].appendChild(row);
+        await commitDomOrder(snap);
+      });
+      up.title = `Move the break down: the first song of ${next.name} closes ${set.name}`;
+      breakBar.appendChild(down);
+      breakBar.appendChild(up);
+      breakBtns.push({ si, down, up });
+      section.appendChild(breakBar);
+    }
     root.appendChild(section);
   }
+  syncSetsFromDom();
+  setupSetsDrag(setContainers, {
+    isEnabled: () => reorderEnabled,
+    // The sticky top bar covers the first band of the screen; scroll-up
+    // starts at its bottom edge.
+    topInset: () => bar.getBoundingClientRect().bottom,
+    onStart: () => snapshotSets(),
+    onCommit: (snap) => commitDomOrder(snap),
+  });
 
   // Add set
   root.appendChild(btn('+ add set', 'sl-btn-ghost', async () => {
@@ -2154,83 +2236,105 @@ export async function renderSetlistEdit(root, setlistId) {
   root.appendChild(danger);
 }
 
-function setupDragReorder(container, set, setlist, opts = {}) {
-  let dragState = null;
+// Drag-to-reorder across every set's row container: a row follows the
+// pointer and is re-slotted into whichever set container the pointer is over
+// (gaps between sets go to the nearer one; an empty set still takes drops).
+// The page auto-scrolls near the viewport edges so a song can travel from
+// set 1 to set 3 on a phone. Only the DOM moves during the drag — the caller's
+// onCommit writes the order back into the setlist.
+function setupSetsDrag(containers, opts = {}) {
+  const EDGE = 70;
+  let drag = null;
 
-  container.addEventListener('pointerdown', (e) => {
+  const targetContainer = (y) => {
+    let best = null, bestDist = Infinity;
+    for (const c of containers) {
+      const r = c.getBoundingClientRect();
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      if (d < bestDist) { best = c; bestDist = d; }
+    }
+    return best;
+  };
+
+  const place = () => {
+    const { row, grabOffset } = drag;
+    const y = drag.lastY;
+    const c = targetContainer(y);
+    const others = [...c.querySelectorAll('[data-song-id]')].filter((r) => r !== row);
+    const before = others.find((r) => {
+      const rect = r.getBoundingClientRect();
+      return rect.top + rect.height / 2 > y;
+    }) || null;
+    if (row.parentElement !== c || row.nextElementSibling !== before) {
+      c.insertBefore(row, before);
+    }
+    // Re-anchor the row under the finger from its (possibly new) layout slot.
+    row.style.transform = '';
+    const top = row.getBoundingClientRect().top;
+    row.style.transform = `translateY(${y - grabOffset - top}px)`;
+  };
+
+  const tick = () => {
+    if (!drag) return;
+    const y = drag.lastY;
+    const h = window.innerHeight;
+    const top = Math.max(0, opts.topInset?.() || 0);
+    // Armed only once the finger has actually travelled, so grabbing a row
+    // that already sits in an edge band doesn't start the page scrolling.
+    if (!drag.armed && Math.abs(y - drag.startY) > 20) drag.armed = true;
+    const speed = !drag.armed ? 0 : y < top + EDGE ? -Math.ceil((top + EDGE - y) / 4) : y > h - EDGE ? Math.ceil((y - (h - EDGE)) / 4) : 0;
+    if (speed) {
+      window.scrollBy(0, Math.max(-24, Math.min(24, speed)));
+      place();
+    }
+    drag.raf = requestAnimationFrame(tick);
+  };
+
+  const onDown = (e) => {
+    if (drag) return;
     if (opts.isEnabled && !opts.isEnabled()) return;
     const handle = e.target.closest('.sl-drag-handle');
     if (!handle) return;
-    e.preventDefault();
-
     const row = handle.closest('[data-song-id]');
     if (!row) return;
+    e.preventDefault();
 
-    const beforeSnapshot = setlist.sets.map(s => ({ name: s.name, songIds: [...s.songIds] }));
-    const oldOrder = [...set.songIds];
     row.classList.add('sl-dragging');
-    dragState = { row, startY: e.clientY };
+    drag = {
+      row,
+      grabOffset: e.clientY - row.getBoundingClientRect().top,
+      lastY: e.clientY,
+      startY: e.clientY,
+      armed: false,
+      snap: opts.onStart?.(),
+      raf: 0,
+    };
+    drag.raf = requestAnimationFrame(tick);
 
     const onMove = (e2) => {
-      if (!dragState) return;
+      if (!drag) return;
       e2.preventDefault();
-
-      const dy = e2.clientY - dragState.startY;
-      dragState.row.style.transform = `translateY(${dy}px)`;
-
-      const rows = [...container.querySelectorAll('[data-song-id]')];
-      const dragRect = dragState.row.getBoundingClientRect();
-      const dragMid = dragRect.top + dragRect.height / 2;
-      const ci = rows.indexOf(dragState.row);
-
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i] === dragState.row) continue;
-        const rect = rows[i].getBoundingClientRect();
-        const mid = rect.top + rect.height / 2;
-
-        if (ci < i && dragMid > mid) {
-          rows[i].after(dragState.row);
-          dragState.startY = e2.clientY;
-          dragState.row.style.transform = '';
-          break;
-        } else if (ci > i && dragMid < mid) {
-          rows[i].before(dragState.row);
-          dragState.startY = e2.clientY;
-          dragState.row.style.transform = '';
-          break;
-        }
-      }
+      drag.lastY = e2.clientY;
+      place();
     };
-
     const onUp = async () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
-
-      if (!dragState) return;
-      dragState.row.classList.remove('sl-dragging');
-      dragState.row.style.transform = '';
-
-      const rows = [...container.querySelectorAll('[data-song-id]')];
-      const newOrder = rows.map(r => r.dataset.songId);
-      if (newOrder.join('|') !== oldOrder.join('|')) {
-        opts.onCommit?.(beforeSnapshot);
-      }
-      set.songIds = newOrder;
-      await store.putSetlist(setlist);
-
-      rows.forEach((r, i) => {
-        const num = r.querySelector('.sl-song-num');
-        if (num) num.textContent = i + 1;
-      });
-
-      dragState = null;
+      if (!drag) return;
+      const { row: r, snap, raf } = drag;
+      drag = null;
+      cancelAnimationFrame(raf);
+      r.classList.remove('sl-dragging');
+      r.style.transform = '';
+      await opts.onCommit?.(snap);
     };
-
-    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointermove', onMove, { passive: false });
     document.addEventListener('pointerup', onUp);
     document.addEventListener('pointercancel', onUp);
-  });
+  };
+
+  for (const c of containers) c.addEventListener('pointerdown', onDown);
 }
 
 // ── Song Focus ──
