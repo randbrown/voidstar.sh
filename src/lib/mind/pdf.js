@@ -22,13 +22,42 @@ export async function getPdfjs() {
   return _pdfjsPromise;
 }
 
-async function openDoc(blob) {
+// pdf.js loads some decoders at runtime, by filename: the wasm JBIG2 /
+// CCITT-fax / JPEG 2000 image codecs (what scanned PDFs are made of) and the
+// standard-font data. Without them a scan's page image silently fails to
+// decode and the page rasterizes blank white. pdf.js asks for a base URL +
+// filename, but the bundler hashes asset names, so instead of a base URL it
+// gets a factory that maps each filename to its bundled URL (pdf.js then
+// routes these fetches through the main thread).
+const PDFJS_ASSETS = Object.fromEntries(
+  Object.entries(import.meta.glob(
+    ['/node_modules/pdfjs-dist/wasm/*.wasm', '/node_modules/pdfjs-dist/standard_fonts/*'],
+    { query: '?url', import: 'default', eager: true },
+  )).map(([path, url]) => [path.slice(path.lastIndexOf('/') + 1), url]),
+);
+
+class BundledPdfAssets {
+  async fetch({ filename }) {
+    const url = PDFJS_ASSETS[filename];
+    if (!url) throw new Error(`pdf.js asset not bundled: ${filename}`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`pdf.js asset ${filename}: HTTP ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+}
+
+// Open a PDF blob with the bundled decoders wired in. Every getDocument in
+// the app goes through here — the setlist chart cache included.
+export async function openPdf(blob) {
   const pdfjs = await getPdfjs();
-  return pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise;
+  return pdfjs.getDocument({
+    data: await blob.arrayBuffer(),
+    BinaryDataFactory: BundledPdfAssets,
+  }).promise;
 }
 
 export async function pdfPageCount(blob) {
-  const doc = await openDoc(blob);
+  const doc = await openPdf(blob);
   const n = doc.numPages;
   doc.loadingTask.destroy();
   return n;
@@ -36,7 +65,7 @@ export async function pdfPageCount(blob) {
 
 // Rasterize one page (1-based) to {blob, width, height}.
 export async function rasterizePdfPage(blob, pageNum, { maxWidth = 1600 } = {}) {
-  const doc = await openDoc(blob);
+  const doc = await openPdf(blob);
   try {
     const page = await doc.getPage(pageNum);
     const base = page.getViewport({ scale: 1 });
@@ -79,7 +108,7 @@ export function clearPdfPageCache() {
 export const OCR_MAX_PAGES = 20;
 
 export async function extractPdfText(blob) {
-  const doc = await openDoc(blob);
+  const doc = await openPdf(blob);
   try {
     let out = [];
     const pages = Math.min(doc.numPages, 200);

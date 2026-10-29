@@ -1422,8 +1422,21 @@ perform mode always renders the primary):
    into one tall PNG, so every render path still gets a single flat image
    and annotations normalize against the whole document. A raw PDF blob
    already in the cache (a direct `.pdf` link) is rasterized on read.
-   Entries written this way carry `full: true`. A Drive-file image entry
-   without it is the old page-1 thumbnail: `getOfflineChart` flags it
+   **Scanned PDFs need pdf.js's wasm decoders.** A scan's page is one big
+   JBIG2 / CCITT-fax / JPEG 2000 image, and pdf.js 5 decodes those with wasm
+   modules it fetches at runtime by filename. Without them the image is
+   skipped with only a console warning (`OpenJPEG failed to initialize`)
+   and the page rasterizes **blank white** — which dark mode shows as a solid
+   black chart under the ink. Every `getDocument` therefore goes through
+   `openPdf` (`src/lib/mind/pdf.js`), which hands pdf.js a
+   `BinaryDataFactory` mapping those filenames (plus the standard-font data)
+   to their bundled, hashed asset URLs. Don't call `pdfjs.getDocument`
+   directly.
+
+   Entries written this way carry `full: FULL_RENDER` (`chart-cache.js`).
+   `isStaleChartRecord` flags older Drive-file entries: no `full` is the old
+   page-1 thumbnail, and a PNG with `full: true` may be a blank raster from
+   before the decoders were wired in. `getOfflineChart` flags it
    `stale`, the song page, annotation editor and perform mode re-fetch it
    before rendering when online (`getOrCacheOfflineChart` →
    `refreshStaleChart`, not in the background, so no view holds strokes the

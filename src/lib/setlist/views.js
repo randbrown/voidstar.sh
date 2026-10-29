@@ -18,7 +18,7 @@ import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics, isLocalDirty } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, refreshStaleChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, refreshStaleChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT, FULL_RENDER } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
@@ -2528,8 +2528,8 @@ function mountRemoteChartInto(stage, song, chart = null) {
 // the uncached live render is Drive's page-1 thumbnail, so a multi-page PDF
 // would show (and be annotated as) its first page only. Null when it can't
 // be cached (offline, no worker, fetch failed): callers fall back to live.
-// A `stale` cached entry (a page-1-only Drive render from before
-// whole-document caching) is refreshed here BEFORE rendering — not in the
+// A `stale` cached entry (a Drive render from an older renderer: a page-1
+// thumbnail, or a possibly-blank PDF raster) is refreshed here BEFORE rendering — not in the
 // background — so the annotation editor never holds strokes that the
 // refresh's page-1 → page-stack migration rewrites underneath it.
 async function getOrCacheOfflineChart(song, chart) {
@@ -5828,7 +5828,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
         await store.putSong(song);
         // The PNG bytes are already in hand — prime the offline cache
         // directly instead of a worker round-trip.
-        await store.putChartBlob(songId, blob, webViewLink, { full: true });
+        await store.putChartBlob(songId, blob, webViewLink, { full: FULL_RENDER });
         await store.deleteAnnotation(songId);
         if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
         showLinkToast('chart linked to this song', webViewLink);
