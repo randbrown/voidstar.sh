@@ -49,6 +49,49 @@ export function workerHeaders(extra = {}) {
   return token ? { ...extra, 'X-Worker-Token': token } : { ...extra };
 }
 
+// The user's own AI provider keys, for the worker's /ai/* routes. The
+// worker only spends its own keys for its owner (the WORKER_TOKEN), so
+// everyone else brings theirs. Deliberately NOT part of `sources`: these stay
+// in this browser's localStorage only — never in the Drive backup, never in
+// a sources export — and are sent only on /ai/* requests.
+const AI_KEYS_KEY = 'voidstar.setlist.aiKeys';
+const AI_KEY_HEADERS = { anthropic: 'X-Anthropic-Key', openai: 'X-OpenAI-Key', gemini: 'X-Gemini-Key' };
+
+export function getAiKeys() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(AI_KEYS_KEY)); } catch { stored = null; }
+  const keys = {};
+  for (const name of Object.keys(AI_KEY_HEADERS)) {
+    keys[name] = typeof stored?.[name] === 'string' ? stored[name].trim() : '';
+  }
+  return keys;
+}
+
+export function setAiKeys(keys) {
+  const clean = {};
+  for (const name of Object.keys(AI_KEY_HEADERS)) {
+    const v = String(keys?.[name] || '').trim();
+    if (v) clean[name] = v;
+  }
+  try {
+    if (Object.keys(clean).length) localStorage.setItem(AI_KEYS_KEY, JSON.stringify(clean));
+    else localStorage.removeItem(AI_KEYS_KEY);
+  } catch {}
+}
+
+// What to tell the user when an /ai/* call came back with no usable key.
+export const NO_AI_KEY_HINT = "no AI key — add your own API key in Settings → AI keys (the worker's own keys only work with its owner's access token)";
+
+// workerHeaders() plus the user's own AI keys — for /ai/* requests only.
+function aiHeaders(extra = {}) {
+  const headers = workerHeaders(extra);
+  const keys = getAiKeys();
+  for (const [name, header] of Object.entries(AI_KEY_HEADERS)) {
+    if (keys[name]) headers[header] = keys[name];
+  }
+  return headers;
+}
+
 export function setSources(sources) {
   localStorage.setItem(SOURCES_KEY, JSON.stringify(sources));
 }
@@ -654,7 +697,7 @@ export async function fetchAiChart(song, { retry = false } = {}) {
       params.set('retry', '1');
       params.set('t', String(Date.now()));
     }
-    const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`, { headers: workerHeaders() });
+    const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`, { headers: aiHeaders() });
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
@@ -670,7 +713,8 @@ export async function fetchAiChart(song, { retry = false } = {}) {
 // grounding (worker /ai/steel-summary): presence, entrances, style lineage,
 // intensity — a few sentences for quick reference while studying/performing.
 // Returns {ok:true, data:{summary, confidence, provider, model, sources}} or
-// {ok:false, reason} — 'no-ai-key' means the worker has no AI key configured.
+// {ok:false, reason} — 'no-ai-key' means no AI key is available to this
+// user (their own, from Settings → AI keys, or the owner's via the token).
 // opts.fresh busts the 7-day response cache (a regen must actually re-run,
 // not replay the cached answer); opts.retry additionally tells the worker
 // the previous summary was marked WRONG, so it researches harder. The bulk
@@ -682,7 +726,7 @@ export async function fetchSteelSummary(song, { fresh = false, retry = false } =
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
     if (retry) params.set('retry', '1');
     if (fresh || retry) params.set('t', String(Date.now()));
-    const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`, { headers: workerHeaders() });
+    const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`, { headers: aiHeaders() });
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
@@ -783,7 +827,7 @@ async function chartReadImages(blob, maxDim = CHART_READ_MAX_DIM) {
 
 // Returns {ok:true, data:{key?, bpm?, capo?, keyChanges?, artist?}} with only
 // the fields the model actually read off the page, or {ok:false, reason} —
-// 'no-ai-key' means skip silently (no key configured on the worker).
+// 'no-ai-key' means skip silently (no AI key available to this user).
 export async function readChartImage(song, blob) {
   const sources = getSources();
   if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
@@ -796,7 +840,7 @@ export async function readChartImage(song, blob) {
   try {
     const res = await fetch(`${sources.workerUrl}/ai/chart-read`, {
       method: 'POST',
-      headers: workerHeaders({ 'Content-Type': 'application/json' }),
+      headers: aiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         // `image`/`mimeType` are the single-image shape a worker deployed
         // before the corner crops still understands; `images` carries the

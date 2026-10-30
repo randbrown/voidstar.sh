@@ -52,6 +52,7 @@ config). Tokens and per-device display prefs never ride it:
 |---|---|---|---|
 | `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + optional worker access token + personal/community Drive chart-folder ids (Settings) |
 | `voidstar.setlist.gdrive.clientId` | localStorage | ✗ (deliberately) | Google OAuth client id — now an **optional override** (Settings → advanced): sign-in defaults to the app-owned client id (`src/lib/qualia/google-config.js`, `PUBLIC_GOOGLE_CLIENT_ID`); this key only overrides it for a self-host. Public identifier, not a secret. It used to ride `settings.gdriveClientId`, but a device can only read a backup it's already on the right client for, so inheriting it could only ever *switch* a device to another client — an old override fill-emptied into devices on the app-owned id (and re-appeared after being cleared), splitting the data into two Drive files that both said "backed up". The cached token is stamped with the client id that minted it and ignored after the id changes; Settings → diagnostics shows a **client fingerprint** and the data file id to compare across devices |
+| `voidstar.setlist.aiKeys` | localStorage | ✗ (deliberately) | the user's **own** Anthropic/OpenAI/Gemini keys (Settings → AI keys), sent only on `/ai/*` requests as `X-Anthropic-Key`/`X-OpenAI-Key`/`X-Gemini-Key`. Browser-only by design — never in the Drive backup or a sources export, and the worker uses them per request without storing or logging them |
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
 | `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | ✗ | backup + history-rotation throttle timestamps |
@@ -1742,3 +1743,14 @@ stays open for back-compat, so protection is opt-in. A best-effort per-IP
 token bucket (60 req/min, in-memory, per-colo) also throttles a single client
 hammering the expensive routes — it's a cost blunt, not a hard global limit;
 the token is the real gate.
+
+**Whose AI keys get spent** (`aiEnvFor`). The worker's own
+`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY` are the owner's, so the
+`/ai/*` routes spend them **only** for a request carrying a valid
+`WORKER_TOKEN` — and an open worker (no `WORKER_TOKEN`) never spends them at
+all. Anyone else sets their own key in Settings → AI keys; an `/ai/*` request
+that carries one skips the token gate (it spends only that key) and runs with
+**only** the user's keys — the owner's never backfill a user's failover chain.
+Non-AI routes stay token-gated either way. A request with neither gets
+`aiConfigured: false` and a "add your own API key in Settings → AI keys"
+reason. Pinned by `scripts/check-setlist-ai-keys.mjs`.

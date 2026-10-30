@@ -5,7 +5,7 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks, resolveBandcampEmbed, searchSpotifyTracks, scoreSpotifyGuess } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getAiKeys, setAiKeys, NO_AI_KEY_HINT, getReferencePlaylistTracks, resolveBandcampEmbed, searchSpotifyTracks, scoreSpotifyGuess } from './sync.js';
 import { renderBandcampEmbed, renderSoundcloudEmbed, renderYoutubeEmbed, altLinksOf, makeAltLink, linkService, songHasLink, LINK_SERVICE_LABELS, LINK_PRIMARY_FIELD, fileToPhotoDataUrl, isDisplayablePhoto } from './media.js';
 import { searchYoutube, scoreYoutubeMatch, songHasYoutube, isYoutubePlaylistUrl } from './youtube.js';
 import { importYoutubePlaylist, applyYoutubeToSong } from './youtube-import.js';
@@ -3484,7 +3484,7 @@ export async function renderSongFocus(root, songId, setlistId) {
     } else {
       console.warn('[setlist] steel summary:', r.reason);
       const reasons = {
-        'no-ai-key': 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY',
+        'no-ai-key': NO_AI_KEY_HINT,
         'worker-outdated': 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary',
         'no worker configured': 'no worker URL configured in Settings',
       };
@@ -4573,9 +4573,28 @@ export async function renderSettings(root) {
     <label class="sl-label" style="margin-top:0.5rem">Access token (optional)
       <input class="sl-input" id="sl-worker-token" value="${esc(sources.workerToken || '')}" placeholder="matches the worker's WORKER_TOKEN secret">
     </label>
-    <div class="sl-hint">Set this only if your worker has a <code>WORKER_TOKEN</code> secret. It stops strangers who learn the URL from spending your Spotify/AI/Drive quota. Rides the Drive backup, so it syncs to your other devices.</div>
+    <div class="sl-hint">Matches your worker's <code>WORKER_TOKEN</code> secret. It stops strangers who learn the URL from spending your Spotify/AI/Drive quota, and the worker only spends its own AI keys for requests that carry it. Rides the Drive backup, so it syncs to your other devices.</div>
   `;
   root.appendChild(workerSection);
+
+  // The user's own AI keys — for anyone using a worker they don't own (its
+  // AI keys are the owner's). Browser-only: never in the Drive backup.
+  const aiKeys = getAiKeys();
+  const aiKeysSection = el('div', 'sl-section');
+  aiKeysSection.innerHTML = `
+    <div class="sl-section-title">AI keys</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">Your own API key for AI charts, chart reading, and steel summaries — you pay your provider directly. Not needed if you own this worker and set its access token above. Saved in this browser only: never backed up to Drive or synced, and sent only with AI requests.</div>
+    <label class="sl-label">Anthropic (Claude)
+      <input class="sl-input" id="sl-ai-key-anthropic" type="password" autocomplete="off" spellcheck="false" value="${esc(aiKeys.anthropic)}" placeholder="sk-ant-…">
+    </label>
+    <label class="sl-label" style="margin-top:0.5rem">OpenAI (optional fallback)
+      <input class="sl-input" id="sl-ai-key-openai" type="password" autocomplete="off" spellcheck="false" value="${esc(aiKeys.openai)}" placeholder="sk-…">
+    </label>
+    <label class="sl-label" style="margin-top:0.5rem">Gemini (optional fallback)
+      <input class="sl-input" id="sl-ai-key-gemini" type="password" autocomplete="off" spellcheck="false" value="${esc(aiKeys.gemini)}" placeholder="AIza…">
+    </label>
+  `;
+  root.appendChild(aiKeysSection);
 
   // Google Drive folders — personal and community/shared are kept as two
   // separate lists (different trust profiles: a shared archive you don't own
@@ -4865,6 +4884,15 @@ export async function renderSettings(root) {
   };
   document.getElementById('sl-worker-url').addEventListener('change', saveWorker);
   document.getElementById('sl-worker-token').addEventListener('change', saveWorker);
+
+  const saveAiKeys = () => setAiKeys({
+    anthropic: document.getElementById('sl-ai-key-anthropic').value,
+    openai: document.getElementById('sl-ai-key-openai').value,
+    gemini: document.getElementById('sl-ai-key-gemini').value,
+  });
+  for (const id of ['sl-ai-key-anthropic', 'sl-ai-key-openai', 'sl-ai-key-gemini']) {
+    document.getElementById(id).addEventListener('change', saveAiKeys);
+  }
 }
 
 // ── Trash — recover recently deleted songs / setlists / notes ──

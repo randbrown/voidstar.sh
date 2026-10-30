@@ -97,12 +97,17 @@
 //   OPENAI_API_KEY         — OpenAI (+ OPENAI_MODEL, default gpt-5-mini;
 //                            Responses API with the web_search tool)
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
+//
+// These keys are the OWNER's: they're spent only for requests carrying the
+// WORKER_TOKEN (so set one — without it they're never used). Anyone else
+// sends their own key per request (X-Anthropic-Key / X-OpenAI-Key /
+// X-Gemini-Key, from Settings → AI keys in their browser); see aiEnvFor.
 
 import Anthropic from '@anthropic-ai/sdk';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Token, X-Anthropic-Key, X-OpenAI-Key, X-Gemini-Key',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -121,6 +126,45 @@ function tokenOk(request, env) {
   let diff = 0;
   for (let i = 0; i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
   return diff === 0;
+}
+
+// Whose AI keys an /ai/* request spends. The worker's own ANTHROPIC/OPENAI/
+// GEMINI keys are the owner's (and the owner's monthly API credits), so they
+// are used ONLY for a request carrying the owner's WORKER_TOKEN — and only
+// when one is configured: an open worker (no WORKER_TOKEN) never spends its
+// own AI keys, because anyone who learned the URL could. Everyone else brings
+// their own key in X-Anthropic-Key / X-OpenAI-Key / X-Gemini-Key: it lives in
+// their browser, is used for this one request, and is never stored or logged
+// here. A request that sends its own key uses only its own keys — the owner's
+// never backfill a user's failover chain.
+const USER_AI_KEY_HEADERS = [
+  ['ANTHROPIC_API_KEY', 'X-Anthropic-Key'],
+  ['OPENAI_API_KEY', 'X-OpenAI-Key'],
+  ['GEMINI_API_KEY', 'X-Gemini-Key'],
+];
+const NO_AI_KEYS = { ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '' };
+
+function userAiKeys(request) {
+  const keys = {};
+  for (const [envVar, header] of USER_AI_KEY_HEADERS) {
+    const v = (request.headers.get(header) || '').trim();
+    if (v && v.length <= 512) keys[envVar] = v;
+  }
+  return keys;
+}
+
+export function hasUserAiKey(request) {
+  return Object.keys(userAiKeys(request)).length > 0;
+}
+
+// The env an /ai/* handler runs with: the provider keys swapped for whoever
+// is paying, tagged with AI_KEY_SOURCE ('user' | 'owner' | 'none') so a
+// keyless response can say which key is missing.
+export function aiEnvFor(request, env) {
+  const userKeys = userAiKeys(request);
+  if (Object.keys(userKeys).length) return { ...env, ...NO_AI_KEYS, ...userKeys, AI_KEY_SOURCE: 'user' };
+  if (env.WORKER_TOKEN && tokenOk(request, env)) return { ...env, AI_KEY_SOURCE: 'owner' };
+  return { ...env, ...NO_AI_KEYS, AI_KEY_SOURCE: 'none' };
 }
 
 // Best-effort per-IP rate limit. Workers isolates are ephemeral and per-colo,
@@ -2575,10 +2619,10 @@ async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4
 async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
@@ -2669,7 +2713,12 @@ function groundedProviders(env, impls) {
   return { providers, skipped };
 }
 
-const NO_AI_KEY_REASON = 'no AI key configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY on the worker';
+function noAiKeyReason(env) {
+  if (env.AI_KEY_SOURCE === 'owner') {
+    return 'no AI key configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY on the worker';
+  }
+  return 'no AI key — add your own API key in Settings → AI keys';
+}
 
 // The user marked the previous answer wrong — spent on a retry, the model
 // should re-research instead of re-emitting its first take.
@@ -2694,7 +2743,7 @@ async function handleAiChart(request, env) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: NO_AI_KEY_REASON,
+      reason: noAiKeyReason(env),
     }), 200, request, env);
   }
 
@@ -2793,7 +2842,7 @@ async function handleAiSteelSummary(request, env) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: NO_AI_KEY_REASON,
+      reason: noAiKeyReason(env),
     }), 200, request, env);
   }
 
@@ -2977,10 +3026,10 @@ async function chartReadOpenAI(env, prompt, images) {
 async function chartReadGemini(env, prompt, images) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
       body: JSON.stringify({
         contents: [{
           role: 'user',
@@ -3048,7 +3097,7 @@ async function handleAiChartRead(request, env) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: NO_AI_KEY_REASON,
+      reason: noAiKeyReason(env),
     }), 200, request, env);
   }
 
@@ -3120,7 +3169,10 @@ export default {
     }
 
     // Access control + throttle apply to every real route (not / or /health).
-    if (!tokenOk(request, env)) {
+    // An /ai/* call that brings its own AI key spends only that key, so it
+    // doesn't need the owner's token (see aiEnvFor).
+    const isAiRoute = url.pathname.startsWith('/ai/');
+    if (!tokenOk(request, env) && !(isAiRoute && hasUserAiKey(request))) {
       return corsResponse(JSON.stringify({ error: 'unauthorized' }), 401, request, env);
     }
     if (rateLimited(request, Date.now())) {
@@ -3142,15 +3194,15 @@ export default {
       }
 
       if (url.pathname === '/ai/chart') {
-        return await handleAiChart(request, env);
+        return await handleAiChart(request, aiEnvFor(request, env));
       }
 
       if (url.pathname === '/ai/chart-read' && request.method === 'POST') {
-        return await handleAiChartRead(request, env);
+        return await handleAiChartRead(request, aiEnvFor(request, env));
       }
 
       if (url.pathname === '/ai/steel-summary') {
-        return await handleAiSteelSummary(request, env);
+        return await handleAiSteelSummary(request, aiEnvFor(request, env));
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {

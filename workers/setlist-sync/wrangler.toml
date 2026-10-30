@@ -12,6 +12,10 @@
 #                          in the app: Settings → sync worker → access token.
 #                          Without it anyone who learns the URL can spend your
 #                          Spotify/AI/Drive quota. Unset = open (back-compat).
+#                          The AI keys below are ONLY spent for requests that
+#                          carry this token — with it unset they're never
+#                          used. Other people's /ai/* calls bring their own
+#                          key (Settings → AI keys) and skip the token check.
 #
 # Optional — better /web/* chart search (otherwise keyless DuckDuckGo HTML):
 #   GOOGLE_CSE_ID          Programmable Search Engine id (pairs with GOOGLE_API_KEY;
@@ -19,7 +23,7 @@
 #   BRAVE_SEARCH_API_KEY   Brave Search API token
 #
 # Optional — /ai/chart LLM chart drafting + /ai/chart-read scan reading
-# (first configured provider wins):
+# (first configured provider wins; owner-only, see WORKER_TOKEN above):
 #   ANTHROPIC_API_KEY      Claude, with web-search grounding
 #
 #   Model per route — each is a plain var, and each defaults to the cheapest

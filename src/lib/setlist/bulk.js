@@ -8,7 +8,7 @@
 // This module is a leaf: views.js calls it; nothing here renders UI.
 
 import * as store from './store.js';
-import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary, fetchPlaylistTracks, searchSpotifyTracks, scoreSpotifyGuess, isConfidentGuess, GUESS_MIN_TITLE_SCORE } from './sync.js';
+import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary, fetchPlaylistTracks, searchSpotifyTracks, scoreSpotifyGuess, isConfidentGuess, GUESS_MIN_TITLE_SCORE, NO_AI_KEY_HINT } from './sync.js';
 import { matchScore } from './match.js';
 import { parseSpotifyUrl } from './spotify.js';
 import { isSpotifyConnected } from './spotify-auth.js';
@@ -76,7 +76,7 @@ export async function readChartFields(song, onStage) {
           aiOk = true;
           applied += applyEmptyFields(song, read.data);
         }
-        else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to read scanned charts');
+        else if (read.reason === 'no-ai-key') problems.push(`${NO_AI_KEY_HINT} to read scanned charts`);
         else {
           aiReason = read.reason;
           problems.push(`AI read failed: ${read.reason}`);
@@ -206,7 +206,7 @@ export async function summarizeSteelForAllSongs(onProgress) {
       updated++;
       stopper.ok();
     } else if (r.reason === 'no-ai-key') {
-      return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY', total: targets.length, updated, failures };
+      return { aborted: NO_AI_KEY_HINT, total: targets.length, updated, failures };
     } else if (r.reason === 'worker-outdated') {
       return { aborted: 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary', total: targets.length, updated, failures };
     } else {
