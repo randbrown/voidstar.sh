@@ -28,9 +28,9 @@ const logos = [
 // Press photos. `credit` prints under the photo — leave it empty when unknown
 // rather than guessing a photographer.
 const photos = [
-  { img: photoQualia, file: 'voidstar-live-qualia.jpg',  label: 'live — qualia on the wall', credit: '', alt: 'Randy Brown at the pedal steel with a laptop while the qualia instrument and live code are projected on a screen behind' },
-  { img: photoCode,   file: 'voidstar-live-code.jpg',    label: 'steel + projected code',    credit: '', alt: 'Randy Brown playing pedal steel in silhouette against projected Strudel code' },
-  { img: photoStream, file: 'voidstar-stream-still.jpg', label: 'live-coding the steel',     credit: '', alt: 'Live code and glitch bars layered over Randy Brown at a pedal steel and laptop' },
+  { img: photoQualia, file: 'voidstar-live-qualia.jpg',  label: 'live — qualia on the wall', credit: 'Victoria Kay', alt: 'Randy Brown at the pedal steel with a laptop while the qualia instrument and live code are projected on a screen behind' },
+  { img: photoCode,   file: 'voidstar-live-code.jpg',    label: 'steel + projected code',    credit: 'Paul Seguna', alt: 'Randy Brown playing pedal steel in silhouette against projected Strudel code' },
+  { img: photoStream, file: 'voidstar-stream-still.jpg', label: 'live-coding the steel',     credit: 'Knoxville Community Media', alt: 'Live code and glitch bars layered over Randy Brown at a pedal steel and laptop' },
   { img: photoSteel,  file: 'randy-brown-pedal-steel.jpg', label: 'pedal steel — Relix Theatre, 2025', credit: 'Inside of Knoxville', alt: 'Randy Brown playing a Williams pedal steel on stage' },
 ];
 const [heroPhoto] = photos;
@@ -76,6 +76,7 @@ const { bios, contact } = press;
             class="press-hero-img"
             loading="eager"
           />
+          {heroPhoto.credit && <figcaption>photo: {heroPhoto.credit}</figcaption>}
         </figure>
       </header>
 
@@ -357,6 +358,13 @@ const { bios, contact } = press;
 }
 .press-header-copy { min-width: 0; }
 .press-hero { margin: 0; }
+.press-hero figcaption {
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-align: right;
+}
 .press-hero-img {
   width: 100%;
   height: auto;
