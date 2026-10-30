@@ -114,7 +114,7 @@ export const press = {
   quotes: [] as { text: string; source: string; href?: string }[],
 
   contact: {
-    email: '', // booking email — leave empty to fall back to Instagram DM
+    email: 'booking@voidstar.sh', // forwards via email routing; empty falls back to Instagram DM
     instagram: 'https://instagram.com/voidstar0',
     site: 'https://randbrown.com/press/',
   },
