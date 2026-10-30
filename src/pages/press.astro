@@ -2,43 +2,29 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import VideoCard from '../components/VideoCard.astro';
 import { Image } from 'astro:assets';
-import logoMain from '../assets/art/logos_alpha/voidstar_logo_0.png';
-import emblemCosmos from '../assets/art/logos_alpha/voidstar_emblem_cosmos_0.png';
-import emblemText from '../assets/art/logos_alpha/voidstar_emblem_text_0.png';
-import logoAtom from '../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
-import photoQualia from '../assets/press/voidstar-live-qualia.jpg';
-import photoCode from '../assets/press/voidstar-live-code.jpg';
-import photoStream from '../assets/press/voidstar-stream-still.jpg';
-import photoSteel from '../assets/press/nightjar-relix-2025-steel.jpg';
-import { press } from '../data/press';
+import type { ImageMetadata } from 'astro';
+import { press, PRESS_ZIP } from '../data/press';
 import { videos as rawVideos, enrichWithOEmbed } from '../data/videos';
 
 const videos = await enrichWithOEmbed(rawVideos);
 const featured = videos.find(v => v.featured) ?? videos[0];
 const moreVideos = videos.filter(v => v !== featured).slice(0, 2);
 
-// Logos are bundled assets (hashed URLs), so link straight to the built file;
-// `download` gives the saved copy a readable name.
-const logos = [
-  { img: logoMain,     file: 'voidstar-wordmark.png',     label: 'wordmark',         note: 'transparent · 837×322' },
-  { img: emblemCosmos, file: 'voidstar-emblem.png',       label: 'emblem',           note: 'transparent · 1024²' },
-  { img: emblemText,   file: 'voidstar-emblem-text.png',  label: 'emblem + name',    note: 'transparent · 1024²' },
-  { img: logoAtom,     file: 'voidstar-atom.png',         label: 'atom mark',        note: 'transparent · 1024²' },
-];
-// Press photos. `credit` prints under the photo — leave it empty when unknown
-// rather than guessing a photographer.
-const photos = [
-  { img: photoQualia, file: 'voidstar-live-qualia.jpg',  label: 'live — qualia on the wall', credit: 'Victoria Kay', alt: 'Randy Brown at the pedal steel with a laptop while the qualia instrument and live code are projected on a screen behind' },
-  { img: photoCode,   file: 'voidstar-live-code.jpg',    label: 'steel + projected code',    credit: 'Paul Seguna', alt: 'Randy Brown playing pedal steel in silhouette against projected Strudel code' },
-  { img: photoStream, file: 'voidstar-stream-still.jpg', label: 'live-coding the steel',     credit: 'Knoxville Community Media', alt: 'Live code and glitch bars layered over Randy Brown at a pedal steel and laptop' },
-  { img: photoSteel,  file: 'randy-brown-pedal-steel.jpg', label: 'pedal steel — Relix Theatre, 2025', credit: 'Inside of Knoxville', alt: 'Randy Brown playing a Williams pedal steel on stage' },
-];
+// press.files lists repo-relative paths; resolve the src/assets/ ones to
+// astro:assets images (optimized thumbnails + a hashed full-size URL to view or
+// download). public/ files are served as-is.
+const assetImages = import.meta.glob<{ default: ImageMetadata }>(
+  '../assets/**/*.{jpg,png}', { eager: true },
+);
+const toImage = (p: string) => {
+  const mod = assetImages[p.replace(/^src\//, '../')];
+  if (!mod) throw new Error(`press.files: no asset at ${p}`);
+  return mod.default;
+};
+const photos = press.files.photos.map(f => ({ ...f, img: toImage(f.path) }));
+const logos = press.files.logos.map(f => ({ ...f, img: toImage(f.path) }));
+const art = press.files.art.map(f => ({ ...f, src: f.path.replace(/^public/, '') }));
 const [heroPhoto] = photos;
-
-const art = [
-  { src: '/images/ramblin_visioneer_randbrown_0.jpg', file: 'ramblin-visioneer.jpg', label: "ramblin' visioneer", note: 'square · 1254²' },
-  { src: '/images/voidstar_atomic_sticker_0.jpg',     file: 'voidstar-atomic.jpg',   label: 'atomic sticker',     note: 'square · 1254²' },
-];
 
 const { bios, contact } = press;
 ---
@@ -227,40 +213,47 @@ const { bios, contact } = press;
         <h2 class="section-heading"><span class="heading-accent">⬡</span> photos, logos &amp; art</h2>
         <div class="photo-grid">
           {photos.map(({ img, file, label, credit, alt }) => (
-            <a href={img.src} download={file} class="asset-card">
-              <span class="photo-thumb">
+            <div class="asset-card">
+              <a href={img.src} class="photo-thumb asset-view" data-lightbox
+                 data-caption={credit ? `${label} · photo: ${credit}` : label} data-file={file}>
                 <Image src={img} alt={alt} widths={[320, 480]} sizes="(max-width: 560px) 100vw, 260px" class="asset-img asset-img-cover" />
-              </span>
+              </a>
               <span class="asset-label">{label}</span>
               <span class="asset-note">
-                {img.width}×{img.height}{credit && <> · photo: {credit}</>} · download ↓
+                {img.width}×{img.height}{credit && <> · photo: {credit}</>}
               </span>
-            </a>
+              <a href={img.src} download={file} class="asset-dl">download ↓</a>
+            </div>
           ))}
         </div>
         <div class="asset-grid">
           {logos.map(({ img, file, label, note }) => (
-            <a href={img.src} download={file} class="asset-card">
-              <span class="asset-thumb asset-thumb-logo">
+            <div class="asset-card">
+              <a href={img.src} class="asset-thumb asset-thumb-logo asset-view" data-lightbox
+                 data-caption={`voidstar ${label}`} data-file={file}>
                 <Image src={img} alt={`voidstar ${label}`} width={240} class="asset-img" />
-              </span>
+              </a>
               <span class="asset-label">{label}</span>
-              <span class="asset-note">{note} · download ↓</span>
-            </a>
+              <span class="asset-note">{note}</span>
+              <a href={img.src} download={file} class="asset-dl">download ↓</a>
+            </div>
           ))}
           {art.map(({ src, file, label, note }) => (
-            <a href={src} download={file} class="asset-card">
-              <span class="asset-thumb">
+            <div class="asset-card">
+              <a href={src} class="asset-thumb asset-view" data-lightbox data-caption={label} data-file={file}>
                 <img src={src} alt={label} loading="lazy" class="asset-img asset-img-cover" />
-              </span>
+              </a>
               <span class="asset-label">{label}</span>
-              <span class="asset-note">{note} · download ↓</span>
-            </a>
+              <span class="asset-note">{note}</span>
+              <a href={src} download={file} class="asset-dl">download ↓</a>
+            </div>
           ))}
         </div>
+        <a href={PRESS_ZIP} download class="btn btn-outline zip-btn">download everything (.zip) ↓</a>
         <p class="note">
-          Please credit photographers where listed. Logos are white-on-transparent — use them
-          on dark backgrounds. Higher-res files on request.
+          Click any image to view it full size. The zip has every photo, logo, and art file
+          plus a README with the bios and photo credits. Please credit photographers where
+          listed. Logos are white-on-transparent — use them on dark backgrounds.
         </p>
       </section>
 
@@ -319,7 +312,63 @@ const { bios, contact } = press;
 
     </div>
   </div>
+  <!-- Full-size viewer for the photo/logo/art grid. Without JS the thumbnails
+       are plain links to the full file, so it still opens in a tab. -->
+  <dialog class="lightbox" id="lightbox" aria-label="Image viewer">
+    <figure class="lb-figure">
+      <img class="lb-img" alt="" />
+      <figcaption class="lb-bar">
+        <span class="lb-caption"></span>
+        <span class="lb-actions">
+          <a class="lb-dl" download>download ↓</a>
+          <button type="button" class="lb-btn" data-lb="prev" aria-label="Previous image">←</button>
+          <button type="button" class="lb-btn" data-lb="next" aria-label="Next image">→</button>
+          <button type="button" class="lb-btn" data-lb="close" aria-label="Close">✕</button>
+        </span>
+      </figcaption>
+    </figure>
+  </dialog>
 </BaseLayout>
+
+<script>
+  // Lightbox: click a thumbnail to view full size; ←/→ step, Esc closes
+  // (native <dialog>), clicking the backdrop closes.
+  const dialog = document.getElementById('lightbox') as HTMLDialogElement;
+  const items = [...document.querySelectorAll<HTMLAnchorElement>('[data-lightbox]')];
+  const img = dialog.querySelector<HTMLImageElement>('.lb-img')!;
+  const caption = dialog.querySelector<HTMLElement>('.lb-caption')!;
+  const dl = dialog.querySelector<HTMLAnchorElement>('.lb-dl')!;
+  let index = 0;
+
+  const show = (i: number) => {
+    index = (i + items.length) % items.length;
+    const a = items[index];
+    img.src = a.href;
+    img.alt = a.querySelector('img')?.alt ?? '';
+    caption.textContent = a.dataset.caption ?? '';
+    dl.href = a.href;
+    dl.download = a.dataset.file ?? '';
+    // Logos are white-on-transparent; keep them on black.
+    dialog.classList.toggle('lb-logo', a.classList.contains('asset-thumb-logo'));
+  };
+
+  items.forEach((a, i) => a.addEventListener('click', e => {
+    e.preventDefault();
+    show(i);
+    dialog.showModal();
+  }));
+  dialog.addEventListener('click', e => {
+    const action = (e.target as HTMLElement).closest<HTMLElement>('[data-lb]')?.dataset.lb;
+    if (action === 'prev') show(index - 1);
+    else if (action === 'next') show(index + 1);
+    else if (action === 'close' || e.target === dialog) dialog.close();
+  });
+  dialog.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft') show(index - 1);
+    else if (e.key === 'ArrowRight') show(index + 1);
+  });
+  dialog.addEventListener('close', () => img.removeAttribute('src'));
+</script>
 
 <script>
   // Copy-to-clipboard for the bios: promoters paste these straight into listings.
@@ -675,7 +724,64 @@ const { bios, contact } = press;
   background: var(--surface);
   transition: border-color 0.2s, transform 0.2s;
 }
-.asset-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.asset-card:hover { border-color: var(--accent); }
+.asset-view { cursor: zoom-in; transition: opacity 0.2s; }
+.asset-view:hover { opacity: 0.85; }
+.asset-dl {
+  margin-top: auto;
+  padding-top: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+.zip-btn { margin-top: 1.25rem; }
+
+/* Lightbox */
+.lightbox {
+  margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: 94vw;
+  max-height: 94vh;
+  overflow: visible;
+}
+.lightbox::backdrop { background: rgba(0, 0, 0, 0.88); }
+.lb-figure { margin: 0; display: flex; flex-direction: column; align-items: center; }
+.lb-img {
+  max-width: 94vw;
+  max-height: calc(94vh - 3rem);
+  width: auto;
+  height: auto;
+  border-radius: var(--radius);
+}
+.lightbox.lb-logo .lb-img { background: #050816; padding: 1.5rem; }
+.lb-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  width: 100%;
+  margin-top: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: #c9d1d9;
+}
+.lb-actions { display: flex; align-items: center; gap: 0.4rem; }
+.lb-dl { color: #66f0ff; margin-right: 0.4rem; }
+.lb-btn {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: #c9d1d9;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  width: 2.1rem;
+  height: 2.1rem;
+  cursor: pointer;
+}
+.lb-btn:hover { color: #fff; border-color: #66f0ff; }
 .asset-thumb {
   display: flex;
   align-items: center;

@@ -8,8 +8,9 @@
 // Optional fields render only when set: an empty `email`, `shows`, or `quotes`
 // simply hides its block instead of shipping a placeholder.
 //
-// Press photos live in src/assets/press/ and are listed in press.astro (they're
-// imported assets); captions and credits sit next to the imports there.
+// Downloadable files (photos, logos, art) are listed in `files` below. The
+// /press page renders them and /voidstar-press-kit.zip bundles the same list at
+// build time, so adding a file here updates both.
 
 export const press = {
   name: 'voidstar',
@@ -118,4 +119,29 @@ export const press = {
     instagram: 'https://instagram.com/voidstar0',
     site: 'https://randbrown.com/press/',
   },
+
+  // `path` is repo-relative. Files under src/assets/ go through astro:assets
+  // (optimized thumbnails); files under public/ are served as-is. `file` is the
+  // name a download (or the zip entry) gets. Leave `credit` empty when unknown
+  // rather than guessing a photographer. The first photo leads the page.
+  files: {
+    photos: [
+      { path: 'src/assets/press/voidstar-live-qualia.jpg',        file: 'voidstar-live-qualia.jpg',    label: 'live — qualia on the wall',         credit: 'Victoria Kay',              alt: 'Randy Brown at the pedal steel with a laptop while the qualia instrument and live code are projected on a screen behind' },
+      { path: 'src/assets/press/voidstar-live-code.jpg',          file: 'voidstar-live-code.jpg',      label: 'steel + projected code',            credit: 'Paul Seguna',               alt: 'Randy Brown playing pedal steel in silhouette against projected Strudel code' },
+      { path: 'src/assets/press/voidstar-stream-still.jpg',       file: 'voidstar-stream-still.jpg',   label: 'live-coding the steel',             credit: 'Knoxville Community Media', alt: 'Live code and glitch bars layered over Randy Brown at a pedal steel and laptop' },
+      { path: 'src/assets/press/nightjar-relix-2025-steel.jpg',   file: 'randy-brown-pedal-steel.jpg', label: 'pedal steel — Relix Theatre, 2025', credit: 'Inside of Knoxville',       alt: 'Randy Brown playing a Williams pedal steel on stage' },
+    ],
+    logos: [
+      { path: 'src/assets/art/logos_alpha/voidstar_logo_0.png',             file: 'voidstar-wordmark.png',    label: 'wordmark',      note: 'transparent · 837×322' },
+      { path: 'src/assets/art/logos_alpha/voidstar_emblem_cosmos_0.png',    file: 'voidstar-emblem.png',      label: 'emblem',        note: 'transparent · 1024²' },
+      { path: 'src/assets/art/logos_alpha/voidstar_emblem_text_0.png',      file: 'voidstar-emblem-text.png', label: 'emblem + name', note: 'transparent · 1024²' },
+      { path: 'src/assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png', file: 'voidstar-atom.png',        label: 'atom mark',     note: 'transparent · 1024²' },
+    ],
+    art: [
+      { path: 'public/images/ramblin_visioneer_randbrown_0.jpg', file: 'ramblin-visioneer.jpg', label: "ramblin' visioneer", note: 'square · 1254²' },
+      { path: 'public/images/voidstar_atomic_sticker_0.jpg',     file: 'voidstar-atomic.jpg',   label: 'atomic sticker',     note: 'square · 1254²' },
+    ],
+  },
 };
+
+export const PRESS_ZIP = '/voidstar-press-kit.zip';
