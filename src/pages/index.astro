@@ -7,6 +7,7 @@ import NullDef from '../components/NullDef.astro';
 import { Image } from 'astro:assets';
 import logoMain from '../assets/art/logos_alpha/voidstar_logo_0.png';
 import emblomCosmos from '../assets/art/logos_alpha/voidstar_emblem_cosmos_0.png';
+import heroPhoto from '../assets/press/voidstar-live-code.jpg';
 import { getCollection } from 'astro:content';
 import { videos as rawVideos, enrichWithOEmbed } from '../data/videos';
 
@@ -29,7 +30,8 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
       <Image src={emblomCosmos} alt="" width={520} class="emblem-img" />
     </div>
 
-    <div class="hero-content container">
+    <div class="hero-inner container">
+    <div class="hero-content">
       <div class="hero-eyebrow">
         <span class="eyebrow-dot"></span>
         <span>ambient · live code · pedal steel</span>
@@ -59,6 +61,19 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
         <a href="https://instagram.com/voidstar0"  target="_blank" rel="noopener" class="social-pill">Instagram</a>
         <a href="https://github.com/randbrown"     target="_blank" rel="noopener" class="social-pill">GitHub</a>
       </div>
+    </div>
+
+    <figure class="hero-photo">
+      <Image
+        src={heroPhoto}
+        alt="Randy Brown playing pedal steel in silhouette against projected Strudel code"
+        widths={[420, 640, 849]}
+        sizes="(max-width: 860px) 100vw, 420px"
+        class="hero-photo-img"
+        loading="eager"
+      />
+      <figcaption>photo: Paul Seguna</figcaption>
+    </figure>
     </div>
   </section>
 
@@ -171,10 +186,37 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 }
 .emblem-img { width: 480px; max-width: 52vw; height: auto; }
 
-.hero-content {
+.hero-inner {
   position: relative;
   z-index: 2;
-  max-width: 680px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 2.5rem;
+  align-items: center;
+}
+@media (max-width: 860px) {
+  .hero-inner { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+}
+.hero-content { max-width: 680px; min-width: 0; }
+
+/* Live photo — the first thing the eye lands on */
+.hero-photo { margin: 0; }
+.hero-photo-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 849 / 726;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent-glow);
+}
+.hero-photo figcaption {
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-align: right;
 }
 .hero-eyebrow {
   display: flex;
