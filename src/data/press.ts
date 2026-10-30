@@ -5,8 +5,11 @@
 // Bios are written pronoun-free on purpose so they can be pasted anywhere
 // as-is; keep new copy that way unless you want to pick one.
 //
-// Optional fields render only when set: an empty `email`, `shows`, `quotes`,
-// or `photos` simply hides its block instead of shipping a placeholder.
+// Optional fields render only when set: an empty `email`, `shows`, or `quotes`
+// simply hides its block instead of shipping a placeholder.
+//
+// Press photos live in src/assets/press/ and are listed in press.astro (they're
+// imported assets); captions and credits sit next to the imports there.
 
 export const press = {
   name: 'voidstar',
@@ -29,7 +32,7 @@ export const press = {
       "voidstar is the ambient / live-code project of Knoxville, Tennessee musician and software engineer Randy Brown. The name is a C programmer's joke — void*, a pointer to untyped memory: potential without form. That's where every set starts.",
       "At the center is the pedal steel: long swells, slow bends, and drones that sit somewhere between country-church sustain and deep-space ambient. The steel runs through a live-coded system — Strudel patterns, a multi-track looper that grabs phrases on the fly, a neural amp model, and vocal processing — so the arrangement is written, rewritten, and erased in real time.",
       "The visuals aren't a backdrop. qualia, the browser-based instrument Brown built for these sets, reads the audio, tracks the performer's movement, and renders it all as light — black holes, stained-glass fields, phosphor code. Audience members can scan a QR code and fold their own movement into the picture. The performer stays in control; the room gets a vote.",
-      "voidstar grew out of Knoxville's experimental and improvised-music scene, and sometimes plays as a father/son duo with Cade Brown. Brown also plays in nightjar and the metal band Dysmorphic Demiurge, and releases solo music as randbrown. Everything voidstar uses on stage is open source and opens in a browser tab at voidstar.sh.",
+      "voidstar grew out of Knoxville's experimental and improvised-music scene, and sometimes plays as a father/son duo with Cade Brown. Off the voidstar stage, Brown plays pedal steel in nightjar, is in the metal band Dysmorphic Demiurge, and releases solo music as randbrown. Everything voidstar uses on stage is open source and opens in a browser tab at voidstar.sh.",
     ],
   },
 
@@ -41,7 +44,7 @@ export const press = {
     { k: 'sound',     v: 'ambient · live code · pedal steel · improvised' },
     { k: 'on stage',  v: 'pedal steel, live-coded laptop rig, projected audio-reactive visuals' },
     { k: 'formats',   v: 'solo · father/son duo with Cade Brown' },
-    { k: 'visuals',   v: 'self-contained — bring a screen or projector and it plays' },
+    { k: 'visuals',   v: 'self-contained — brings a projector if needed; just add a screen' },
   ],
 
   // How to print the name. Lowercase "voidstar" everywhere, including in the
@@ -96,12 +99,12 @@ export const press = {
       'laptop running the full rig (Strudel, looper, amp modeling, visuals)',
       'audio interface + MIDI controller',
       'cables to a stereo line-level output',
+      'a projector, if the venue doesn\'t have one',
     ],
     needs: [
       '2 inputs on the house mix — stereo L/R, line level (XLR or ¼″), or 2 DIs',
       '1 grounded power drop at the performance position',
-      'a table around 4 ft wide for laptop + controller',
-      'projector or screen with an HDMI input (strongly recommended — the visuals are half the show)',
+      'a screen to project on (or the house projector + screen, with an HDMI input) — the visuals are half the show',
       'about 20 min to set up + a short line check',
     ],
   },

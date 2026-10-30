@@ -6,6 +6,10 @@ import logoMain from '../assets/art/logos_alpha/voidstar_logo_0.png';
 import emblemCosmos from '../assets/art/logos_alpha/voidstar_emblem_cosmos_0.png';
 import emblemText from '../assets/art/logos_alpha/voidstar_emblem_text_0.png';
 import logoAtom from '../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import photoQualia from '../assets/press/voidstar-live-qualia.jpg';
+import photoCode from '../assets/press/voidstar-live-code.jpg';
+import photoStream from '../assets/press/voidstar-stream-still.jpg';
+import photoSteel from '../assets/press/nightjar-relix-2025-steel.jpg';
 import { press } from '../data/press';
 import { videos as rawVideos, enrichWithOEmbed } from '../data/videos';
 
@@ -21,6 +25,16 @@ const logos = [
   { img: emblemText,   file: 'voidstar-emblem-text.png',  label: 'emblem + name',    note: 'transparent · 1024²' },
   { img: logoAtom,     file: 'voidstar-atom.png',         label: 'atom mark',        note: 'transparent · 1024²' },
 ];
+// Press photos. `credit` prints under the photo — leave it empty when unknown
+// rather than guessing a photographer.
+const photos = [
+  { img: photoQualia, file: 'voidstar-live-qualia.jpg',  label: 'live — qualia on the wall', credit: '', alt: 'Randy Brown at the pedal steel with a laptop while the qualia instrument and live code are projected on a screen behind' },
+  { img: photoCode,   file: 'voidstar-live-code.jpg',    label: 'steel + projected code',    credit: '', alt: 'Randy Brown playing pedal steel in silhouette against projected Strudel code' },
+  { img: photoStream, file: 'voidstar-stream-still.jpg', label: 'live-coding the steel',     credit: '', alt: 'Live code and glitch bars layered over Randy Brown at a pedal steel and laptop' },
+  { img: photoSteel,  file: 'randy-brown-pedal-steel.jpg', label: 'pedal steel — Relix Theatre, 2025', credit: 'Inside of Knoxville', alt: 'Randy Brown playing a Williams pedal steel on stage' },
+];
+const [heroPhoto] = photos;
+
 const art = [
   { src: '/images/ramblin_visioneer_randbrown_0.jpg', file: 'ramblin-visioneer.jpg', label: "ramblin' visioneer", note: 'square · 1254²' },
   { src: '/images/voidstar_atomic_sticker_0.jpg',     file: 'voidstar-atomic.jpg',   label: 'atomic sticker',     note: 'square · 1254²' },
@@ -30,27 +44,39 @@ const { bios, contact } = press;
 ---
 <BaseLayout
   title="Press kit"
-  description={`voidstar (Randy Brown's voidstar) press kit — bios, billing, video, tech rider, logos, and booking contact.`}
+  description={`voidstar (Randy Brown's voidstar) press kit — bios, billing, video, tech rider, photos, logos, and booking contact.`}
 >
   <div class="press-wrap">
     <div class="container">
 
       <!-- Header -->
       <header class="press-header">
-        <div class="press-label">// press kit</div>
-        <h1 class="press-title">voidstar</h1>
-        <p class="press-aka">also billed as <strong>{press.altBilling}</strong></p>
-        <p class="press-oneliner">{press.oneLiner}</p>
-        <nav class="press-toc" aria-label="Press kit sections">
-          <a href="#bio">bio</a>
-          <a href="#billing">billing</a>
-          <a href="#watch">watch</a>
-          <a href="#show">the show</a>
-          <a href="#rider">rider</a>
-          <a href="#assets">logos & art</a>
-          <a href="#randy">randy brown</a>
-          <a href="#contact">booking</a>
-        </nav>
+        <div class="press-header-copy">
+          <div class="press-label">// press kit</div>
+          <h1 class="press-title">voidstar</h1>
+          <p class="press-aka">also billed as <strong>{press.altBilling}</strong></p>
+          <p class="press-oneliner">{press.oneLiner}</p>
+          <nav class="press-toc" aria-label="Press kit sections">
+            <a href="#bio">bio</a>
+            <a href="#billing">billing</a>
+            <a href="#watch">watch</a>
+            <a href="#show">the show</a>
+            <a href="#rider">rider</a>
+            <a href="#assets">photos & logos</a>
+            <a href="#randy">randy brown</a>
+            <a href="#contact">booking</a>
+          </nav>
+        </div>
+        <figure class="press-hero">
+          <Image
+            src={heroPhoto.img}
+            alt={heroPhoto.alt}
+            widths={[360, 540, 720]}
+            sizes="(max-width: 820px) 100vw, 360px"
+            class="press-hero-img"
+            loading="eager"
+          />
+        </figure>
       </header>
 
       <!-- Fact sheet + short bio -->
@@ -197,7 +223,20 @@ const { bios, contact } = press;
 
       <!-- Logos & art -->
       <section class="press-section" id="assets">
-        <h2 class="section-heading"><span class="heading-accent">⬡</span> logos &amp; art</h2>
+        <h2 class="section-heading"><span class="heading-accent">⬡</span> photos, logos &amp; art</h2>
+        <div class="photo-grid">
+          {photos.map(({ img, file, label, credit, alt }) => (
+            <a href={img.src} download={file} class="asset-card">
+              <span class="photo-thumb">
+                <Image src={img} alt={alt} widths={[320, 480]} sizes="(max-width: 560px) 100vw, 260px" class="asset-img asset-img-cover" />
+              </span>
+              <span class="asset-label">{label}</span>
+              <span class="asset-note">
+                {img.width}×{img.height}{credit && <> · photo: {credit}</>} · download ↓
+              </span>
+            </a>
+          ))}
+        </div>
         <div class="asset-grid">
           {logos.map(({ img, file, label, note }) => (
             <a href={img.src} download={file} class="asset-card">
@@ -219,8 +258,8 @@ const { bios, contact } = press;
           ))}
         </div>
         <p class="note">
-          Logos are white-on-transparent — use them on dark backgrounds. Live photos and
-          higher-res files on request.
+          Please credit photographers where listed. Logos are white-on-transparent — use them
+          on dark backgrounds. Higher-res files on request.
         </p>
       </section>
 
@@ -235,7 +274,10 @@ const { bios, contact } = press;
               the other — voidstar is where the two meet.
             </p>
             <p>
-              Outside voidstar, Randy plays in nightjar and the metal band Dysmorphic Demiurge,
+              Outside voidstar, Randy plays pedal steel in
+              <a href="https://nightjar2.bandcamp.com/" target="_blank" rel="noopener">nightjar</a>,
+              is in the metal band
+              <a href="https://dysmorphicdemiurge.bandcamp.com/" target="_blank" rel="noopener">Dysmorphic Demiurge</a>,
               releases solo music as <a href="https://soundcloud.com/randbrown" target="_blank" rel="noopener">randbrown</a>,
               and builds open-source music tools. The bands, the solo records, and the rest live at
               <a href="https://randbrown.com/press/" target="_blank" rel="noopener">randbrown.com</a>.
@@ -303,7 +345,30 @@ const { bios, contact } = press;
 .press-wrap { padding: 4rem 0 6rem; }
 
 /* Header */
-.press-header { margin-bottom: 3rem; }
+.press-header {
+  margin-bottom: 3rem;
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 2.5rem;
+  align-items: center;
+}
+@media (max-width: 820px) {
+  .press-header { grid-template-columns: 1fr; }
+}
+.press-header-copy { min-width: 0; }
+.press-hero { margin: 0; }
+.press-hero-img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent-glow);
+}
+@media (max-width: 820px) {
+  .press-hero-img { aspect-ratio: 4 / 3; }
+}
 .press-label {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -573,6 +638,19 @@ const { bios, contact } = press;
 .rider-list li::before { content: '·'; position: absolute; left: 0; color: var(--border-2); }
 
 /* Assets */
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.photo-thumb {
+  display: block;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
 .asset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
