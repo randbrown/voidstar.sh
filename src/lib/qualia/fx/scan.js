@@ -1,4 +1,4 @@
-// Scan — a 3D scan (Polycam GLB, PLY point cloud, or Gaussian-splat PLY) as
+// Scan — a 3D scan (Polycam GLB, PLY point cloud, Gaussian-splat PLY/SPZ) as
 // an audio-reactive point cloud. The file is parsed, surface-sampled into N
 // points, leveled onto its tabletop/floor and annotated off the main thread
 // (scan-worker.js → scan-cloud.js); per frame the CPU only writes uniforms.
@@ -28,7 +28,7 @@
 // Inline: beat rising edge → ripple launch; spectrum → strata bands;
 //   pose head.x → orbit offset, pose headPitch → camera elevation (smoothed).
 //
-// Loading: pick a .glb / .ply in the `scan` param. The last file is kept in
+// Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is kept in
 // IndexedDB (scan-store.js) and restored on reload; with nothing loaded (or
 // `source: monolith`) a procedural monolith runs through the same pipeline.
 // GLB limits: uncompressed only (no Draco/meshopt), first base-colour texture.
@@ -229,7 +229,7 @@ export default {
   contextType: 'three',
 
   params: [
-    { id: 'scan',      label: 'scan file',  type: 'file', accept: '.glb,.ply', default: null },
+    { id: 'scan',      label: 'scan file',  type: 'file', accept: '.glb,.ply,.spz', default: null },
     { id: 'source',    label: 'source',     type: 'select', options: ['scan', 'monolith'], default: 'scan' },
     { id: 'mode',      label: 'mode',       type: 'select', options: MODES, default: 'ripple' },
     { id: 'points',    label: 'points',     type: 'select', options: COUNT_OPTS, default: '200000' },

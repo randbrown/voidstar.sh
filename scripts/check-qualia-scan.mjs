@@ -1,16 +1,18 @@
 // Guards the Scan quale's processing pipeline (src/lib/qualia/scan-cloud.js):
-//   node scripts/check-qualia-scan.mjs [path/to/scan.glb|.ply]
+//   node scripts/check-qualia-scan.mjs [path/to/scan.glb|.ply|.spz]
 //
 // Builds synthetic scans in memory — a box standing on a ground slab, the
 // whole thing tilted 25° the way phone scans come out — and checks that the
 // pipeline parses them, levels the ground back to y = 0, frames the figure
 // ~1 unit tall, samples texture colour, and orders the surface distance from
 // the top of the figure down. Also covers PLY point clouds, Gaussian-splat
-// PLYs (SH colour + opacity filter) and the procedural monolith.
+// PLYs (SH colour + opacity filter), SPZ, the far "sky shell" cut, splat
+// expansion with thin-axis normals, and the procedural monolith.
 // With a path argument it also runs a real scan and prints its stats.
 
 import { readFileSync } from 'node:fs';
-import { loadScan, parseGlb, parsePly, detectFormat } from '../src/lib/qualia/scan-cloud.js';
+import { gzipSync } from 'node:zlib';
+import { loadScan, parseGlb, parsePly, parseSpz, detectFormat } from '../src/lib/qualia/scan-cloud.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -167,6 +169,62 @@ console.log('scan: PLY');
   check('splat colour from SH DC', Math.abs(sp.colors[0] - 0.5) < 1e-3 && Math.abs(sp.colors[1] - 1) < 1e-3 && sp.colors[2] < 1e-3);
   const cs = await loadScan(buf, 5000, {});
   check('splat drops near-transparent splats', cs.stats.source.kind === 'splat' && cs.count <= n / 2, `count=${cs.count}`);
+}
+
+// ── Splat shape: sky shell, expansion, normals, SPZ ────────────────────────
+console.log('scan: splat shape + SPZ');
+{
+  // 2000 flat splats on a ground disc + 800 on a vertical post, oriented so
+  // their thin axis is the surface normal; plus a 1500-splat "sky shell" at
+  // radius 240 the way Scaniverse exports wrap a scene.
+  const pts = [];
+  const rng = (() => { let a = 7; return () => ((a = (a * 16807) % 2147483647) / 2147483647); })();
+  for (let i = 0; i < 2000; i++) { const r = Math.sqrt(rng()) * 1.0, t = rng() * 6.283; pts.push({ p: [r * Math.cos(t), 0, r * Math.sin(t)], q: [Math.SQRT1_2, 0, 0, Math.SQRT1_2], c: 200 }); }
+  for (let i = 0; i < 800; i++) { const t = rng() * 6.283; pts.push({ p: [0.05 * Math.cos(t), rng() * 0.8, 0.05 * Math.sin(t)], q: [0, 0, 0, 1], c: 60 }); }
+  for (let i = 0; i < 1500; i++) { const u = rng() * 2 - 1, t = rng() * 6.283, r = Math.sqrt(1 - u * u); pts.push({ p: [240 * r * Math.cos(t), 240 * u, 240 * r * Math.sin(t)], q: [0, 0, 0, 1], c: 128 }); }
+  const n = pts.length;
+
+  // SPZ v3 encoder (inverse of parseSpz) → gzip.
+  const FRAC = 12, body = new Uint8Array(16 + n * (9 + 1 + 3 + 3 + 4));
+  const dv = new DataView(body.buffer);
+  dv.setUint32(0, 0x5053474e, true); dv.setUint32(4, 3, true); dv.setUint32(8, n, true);
+  dv.setUint8(12, 0); dv.setUint8(13, FRAC);
+  let o = 16;
+  for (const { p } of pts) for (const v of p) { const q = Math.round(v * (1 << FRAC)) & 0xffffff; body[o++] = q & 255; body[o++] = (q >> 8) & 255; body[o++] = (q >> 16) & 255; }
+  for (let i = 0; i < n; i++) body[o++] = 230;                                   // alpha ≈ 0.9
+  for (const { c } of pts) for (let k = 0; k < 3; k++) body[o++] = c;
+  // σ = (0.02, 0.02, 0.002) — thin along local z… except the ground splats,
+  // whose quaternion turns local z onto world y.
+  for (let i = 0; i < n; i++) { body[o++] = Math.round((Math.log(0.02) + 10) * 16); body[o++] = Math.round((Math.log(0.02) + 10) * 16); body[o++] = Math.round((Math.log(0.002) + 10) * 16); }
+  for (const { q } of pts) {
+    let largest = 0; for (let k = 1; k < 4; k++) if (Math.abs(q[k]) > Math.abs(q[largest])) largest = k;
+    const sgn = q[largest] < 0 ? -1 : 1;
+    let comp = largest;
+    for (let k = 0; k < 4; k++) {
+      if (k === largest) continue;
+      const v = q[k] * sgn;
+      comp = (comp << 10) | ((v < 0 ? 1 : 0) << 9) | Math.round(Math.abs(v) / Math.SQRT1_2 * 511);
+    }
+    comp >>>= 0;
+    body[o++] = comp & 255; body[o++] = (comp >>> 8) & 255; body[o++] = (comp >>> 16) & 255; body[o++] = (comp >>> 24) & 255;
+  }
+  const gz = gzipSync(body);
+  const spzBuf = gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.byteLength);
+  check('detects spz (gzip)', detectFormat(spzBuf) === 'spz');
+  const raw = parseSpz(body.buffer);
+  check('spz positions decode (24-bit fixed)', Math.abs(raw.positions[2000 * 3 + 1] - pts[2000].p[1]) < 1e-3);
+  check('spz colour / alpha / scale decode', Math.abs(raw.colors[2000 * 3] - (0.5 + 0.28209479 * ((60 / 255 - 0.5) / 0.15))) < 1e-4
+    && Math.abs(raw.weights[0] - 230 / 255) < 1e-6 && Math.abs(raw.scales[2] - 0.002) < 2e-4);
+  check('spz smallest-three rotation decode', Math.abs(raw.rots[0] - Math.SQRT1_2) < 0.01 && Math.abs(raw.rots[3] - Math.SQRT1_2) < 0.01);
+
+  const c = await loadScan(spzBuf, 20000, {});
+  let maxR = 0; for (let i = 0; i < c.count; i++) maxR = Math.max(maxR, Math.hypot(c.positions[i * 3], c.positions[i * 3 + 1], c.positions[i * 3 + 2]));
+  check('sky shell stripped', maxR < 3, `max radius ${maxR.toFixed(2)}`);
+  check('sparse splats expanded to the target count', c.count > 15000, `count=${c.count}`);
+  let up = 0, ng = 0;
+  for (let i = 0; i < c.count; i++) if (!c.fig[i]) { ng++; if (Math.abs(c.normals[i * 3 + 1]) > 0.9) up++; }
+  check('ground splat normals = thin axis (up)', ng > 0 && up / ng > 0.9, `${up}/${ng}`);
+  check('post stands as the figure', c.stats.groundFound && c.stats.figurePoints > 0);
 }
 
 // ── Monolith fallback ──────────────────────────────────────────────────────

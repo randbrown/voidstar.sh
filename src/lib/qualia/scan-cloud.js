@@ -4,16 +4,18 @@
 // and under node in scripts/check-qualia-scan.mjs.
 //
 // Pipeline (loadScan):
-//   1. PARSE   — GLB (binary glTF 2.0, uncompressed) or PLY (ascii / binary;
+//   1. PARSE   — GLB (binary glTF 2.0, uncompressed), PLY (ascii / binary;
 //                plain point clouds, coloured meshes, and 3D Gaussian-splat
-//                exports from Scaniverse / KIRI / Polycam). → a triangle mesh
-//                or a raw point set.
+//                exports from Scaniverse / KIRI / Polycam) or SPZ (Niantic's
+//                gzipped splat format). → a triangle mesh or a raw point set.
 //   2. SAMPLE  — meshes: N points scattered area-uniformly over the triangles,
 //                colour from the base-colour texture (or vertex colours), face
 //                normal per point. Raw vertices are NOT used — scanner apps
 //                decimate flat regions, so vertex density is uneven.
-//                Point sets: random subset (splats: opacity-filtered first,
-//                colour from the SH DC term).
+//                Point sets: far "sky shell" / floaters cut first; then a
+//                random subset, or — for splats sparser than N — each splat
+//                expanded into points drawn from its own Gaussian (normal =
+//                its shortest axis; colour from the SH DC term).
 //   3. LEVEL   — RANSAC finds the dominant plane (the tabletop / floor),
 //                PCA-refines it, and rotates the cloud so it lies on y = 0
 //                with the subject above. Scans are rarely exported level.
@@ -43,6 +45,7 @@ export function detectFormat(buf) {
   const b = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
   if (b[0] === 0x67 && b[1] === 0x6C && b[2] === 0x54 && b[3] === 0x46) return 'glb';   // 'glTF'
   if (b[0] === 0x70 && b[1] === 0x6C && b[2] === 0x79) return 'ply';                    // 'ply'
+  if (b[0] === 0x1F && b[1] === 0x8B) return 'spz';                                     // gzip
   return null;
 }
 
@@ -192,7 +195,8 @@ const PLY_TYPES = {
 // Only these vertex properties are kept — splat PLYs carry ~60 columns and
 // keeping them all for a million splats would cost hundreds of MB.
 const KEEP = new Set(['x', 'y', 'z', 'nx', 'ny', 'nz', 'red', 'green', 'blue', 'r', 'g', 'b',
-  'diffuse_red', 'diffuse_green', 'diffuse_blue', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity']);
+  'diffuse_red', 'diffuse_green', 'diffuse_blue', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
+  'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3']);
 
 /** Parse a PLY into a mesh (if it has faces) or a point set. */
 export function parsePly(buf) {
@@ -306,22 +310,115 @@ export function parsePly(buf) {
     for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) colors[i * 3 + c] = cols[rgbProps[c]][i] * scale;
   }
 
+  // 3DGS exports carry nx/ny/nz columns that are all zero — treat those as
+  // "no normals" rather than handing the shader zero vectors.
   let normals = null;
   if (cols.nx && cols.ny && cols.nz) {
     normals = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { normals[i * 3] = cols.nx[i]; normals[i * 3 + 1] = cols.ny[i]; normals[i * 3 + 2] = cols.nz[i]; }
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      normals[i * 3] = cols.nx[i]; normals[i * 3 + 1] = cols.ny[i]; normals[i * 3 + 2] = cols.nz[i];
+      if (!any && (cols.nx[i] || cols.ny[i] || cols.nz[i])) any = true;
+    }
+    if (!any) normals = null;
   }
-  // Splat opacity is stored as a logit.
-  let weights = null;
+  // Splat opacity is stored as a logit, scale as log σ, rotation as (w,x,y,z).
+  let weights = null, scales = null, rots = null;
   if (isSplat && cols.opacity) {
     weights = new Float32Array(n);
     for (let i = 0; i < n; i++) weights[i] = 1 / (1 + Math.exp(-cols.opacity[i]));
+  }
+  if (isSplat && cols.scale_0 && cols.scale_1 && cols.scale_2 && cols.rot_0) {
+    scales = new Float32Array(n * 3);
+    rots = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      scales[i * 3] = Math.exp(cols.scale_0[i]); scales[i * 3 + 1] = Math.exp(cols.scale_1[i]); scales[i * 3 + 2] = Math.exp(cols.scale_2[i]);
+      rots[i * 4] = cols.rot_1[i]; rots[i * 4 + 1] = cols.rot_2[i]; rots[i * 4 + 2] = cols.rot_3[i]; rots[i * 4 + 3] = cols.rot_0[i];
+    }
   }
 
   if (faces && faces.length) {
     return { kind: 'mesh', positions, indices: new Uint32Array(faces), uvs: null, vcolors: colors, baseColor: [1, 1, 1], image: null };
   }
-  return { kind: 'points', positions, colors, normals, weights, splat: isSplat };
+  return { kind: 'points', positions, colors, normals, weights, scales, rots, splat: isSplat };
+}
+
+// ── SPZ (Niantic's compressed Gaussian-splat format, Scaniverse export) ────
+// gzip → 16-byte header → column blocks: positions (24-bit fixed), alphas,
+// colours, scales, rotations, SH. Only what the quale needs is decoded.
+const SPZ_MAGIC = 0x5053474e;   // 'NGSP'
+const SPZ_COLOR_SCALE = 0.15;
+
+async function gunzip(buf) {
+  if (typeof DecompressionStream !== 'function') throw new Error('spz: this browser cannot decompress gzip');
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return await new Response(stream).arrayBuffer();
+}
+
+/** Parse a decompressed SPZ payload into a splat point set. */
+export function parseSpz(buf) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== SPZ_MAGIC) throw new Error('spz: bad magic');
+  const version = dv.getUint32(4, true);
+  if (version < 1 || version > 3) throw new Error(`spz: unsupported version ${version}`);
+  const n = dv.getUint32(8, true);
+  const fracBits = dv.getUint8(13);
+  const b = new Uint8Array(buf);
+  let o = 16;
+  const positions = new Float32Array(n * 3);
+  if (version === 1) {
+    // v1: float16 positions.
+    for (let i = 0; i < n * 3; i++, o += 2) positions[i] = halfToFloat(dv.getUint16(o, true));
+  } else {
+    const k = 1 / (1 << fracBits);
+    for (let i = 0; i < n * 3; i++, o += 3) {
+      let v = b[o] | (b[o + 1] << 8) | (b[o + 2] << 16);
+      if (v & 0x800000) v |= ~0xffffff;           // sign-extend 24 → 32 bits
+      positions[i] = v * k;
+    }
+  }
+  const weights = new Float32Array(n);
+  for (let i = 0; i < n; i++) weights[i] = b[o++] / 255;          // already sigmoid(opacity)
+  const colors = new Float32Array(n * 3);
+  for (let i = 0; i < n * 3; i++) {
+    const dc = (b[o++] / 255 - 0.5) / SPZ_COLOR_SCALE;
+    colors[i] = Math.min(1, Math.max(0, 0.5 + C0 * dc));
+  }
+  const scales = new Float32Array(n * 3);
+  for (let i = 0; i < n * 3; i++) scales[i] = Math.exp(b[o++] / 16 - 10);
+  const rots = new Float32Array(n * 4);                             // (x, y, z, w)
+  if (version >= 3) {
+    // Smallest-three: 2-bit index of the largest component, then three
+    // (sign + 9-bit magnitude) components, packed from the top of the word.
+    const MASK = 511;
+    for (let i = 0; i < n; i++, o += 4) {
+      let comp = (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+      const largest = comp >>> 30;
+      let sum = 0;
+      for (let c = 3; c >= 0; c--) {
+        if (c === largest) continue;
+        const mag = comp & MASK, neg = (comp >>> 9) & 1;
+        comp >>>= 10;
+        const v = Math.SQRT1_2 * mag / MASK * (neg ? -1 : 1);
+        rots[i * 4 + c] = v; sum += v * v;
+      }
+      rots[i * 4 + largest] = Math.sqrt(Math.max(0, 1 - sum));
+    }
+  } else {
+    for (let i = 0; i < n; i++, o += 3) {
+      const x = b[o] / 127.5 - 1, y = b[o + 1] / 127.5 - 1, z = b[o + 2] / 127.5 - 1;
+      rots[i * 4] = x; rots[i * 4 + 1] = y; rots[i * 4 + 2] = z;
+      rots[i * 4 + 3] = Math.sqrt(Math.max(0, 1 - x * x - y * y - z * z));
+    }
+  }
+  return { kind: 'points', positions, colors, normals: null, weights, scales, rots, splat: true };
+}
+
+function halfToFloat(h) {
+  const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
+  if (e === 0) return s * Math.pow(2, -14) * (f / 1024);
+  if (e === 31) return f ? NaN : s * Infinity;
+  return s * Math.pow(2, e - 15) * (1 + f / 1024);
 }
 
 // ── Procedural fallback — a 2001-style monolith on a ground disc ───────────
@@ -417,27 +514,115 @@ export function sampleMesh(mesh, count, texture, rng) {
   return { count, positions, colors, normals };
 }
 
-/** Random subset of a point set (splats: drop near-transparent ones first). */
+// Rotation matrix (row-major 3×3) of splat s from its (x,y,z,w) quaternion.
+function splatRotation(rots, s, R) {
+  let x = rots[s * 4], y = rots[s * 4 + 1], z = rots[s * 4 + 2], w = rots[s * 4 + 3];
+  const l = Math.hypot(x, y, z, w) || 1;
+  x /= l; y /= l; z /= l; w /= l;
+  R[0] = 1 - 2 * (y * y + z * z); R[1] = 2 * (x * y - z * w);     R[2] = 2 * (x * z + y * w);
+  R[3] = 2 * (x * y + z * w);     R[4] = 1 - 2 * (x * x + z * z); R[5] = 2 * (y * z - x * w);
+  R[6] = 2 * (x * z - y * w);     R[7] = 2 * (y * z + x * w);     R[8] = 1 - 2 * (x * x + y * y);
+}
+
+// A trained splat is a flattened disc lying ON the surface, so its shortest
+// axis is the surface normal — real normals for free.
+function splatNormal(cloud, s, R, out, o) {
+  const sc = cloud.scales;
+  let a = 0;
+  if (sc[s * 3 + 1] < sc[s * 3 + a]) a = 1;
+  if (sc[s * 3 + 2] < sc[s * 3 + a]) a = 2;
+  out[o] = R[a]; out[o + 1] = R[3 + a]; out[o + 2] = R[6 + a];
+}
+
+/** Indices of the dense core of a point set. Scaniverse wraps splat scenes
+ *  in a "sky" shell of background splats hundreds of units out; anything
+ *  past the first big jump in sorted distance from the median centre goes.
+ *  Returns the kept pool and the core's 95th-percentile radius. */
+function coreOf(P, pool, m) {
+  const axis = (k) => {
+    const a = new Float32Array(m);
+    for (let i = 0; i < m; i++) a[i] = P[pool[i] * 3 + k];
+    return a.sort()[m >> 1];
+  };
+  const cx = axis(0), cy = axis(1), cz = axis(2);
+  const d = new Float32Array(m);
+  for (let i = 0; i < m; i++) {
+    const s = pool[i] * 3;
+    d[i] = Math.hypot(P[s] - cx, P[s + 1] - cy, P[s + 2] - cz);
+  }
+  const sorted = Float32Array.from(d).sort();
+  let cut = Infinity;
+  for (let i = Math.floor(m * 0.1); i < m - 1; i++) {
+    if (sorted[i + 1] > 4 * sorted[i] && sorted[i + 1] - sorted[i] > 1e-6) { cut = sorted[i]; break; }
+  }
+  let k = 0;
+  for (let i = 0; i < m; i++) if (d[i] <= cut) pool[k++] = pool[i];
+  return { pool: pool.subarray(0, k), m: k, radius: sorted[Math.floor(Math.min(k - 1, k * 0.95))] || 1 };
+}
+
+/** Points from a point set: a random subset when there are more than
+ *  `count`; for splats with fewer, each splat is expanded into several points
+ *  drawn from its own Gaussian (so a 30k-splat capture still fills a 200k
+ *  cloud, dense where the splats are opaque and broad). */
 export function samplePoints(cloud, count, rng) {
   const n = cloud.positions.length / 3;
   let pool = new Uint32Array(n);
   let m = 0;
   for (let i = 0; i < n; i++) if (!cloud.weights || cloud.weights[i] > 0.15) pool[m++] = i;
-  pool = pool.subarray(0, m);
+  let radius;
+  ({ pool, m, radius } = coreOf(cloud.positions, pool.subarray(0, m), m));
+  const shaped = !!(cloud.splat && cloud.scales && cloud.rots);
+  const R = new Float32Array(9);
+
+  if (shaped && m < count) {
+    // Clamp σ so the few huge haze splats don't spray points everywhere.
+    const sigMax = radius * 0.03;
+    const cdf = new Float64Array(m);
+    let total = 0;
+    for (let i = 0; i < m; i++) {
+      const s = pool[i];
+      const a = Math.min(sigMax, cloud.scales[s * 3]), b = Math.min(sigMax, cloud.scales[s * 3 + 1]), c = Math.min(sigMax, cloud.scales[s * 3 + 2]);
+      total += (cloud.weights ? cloud.weights[s] : 1) * (a * b + b * c + a * c) + 1e-12;
+      cdf[i] = total;
+    }
+    const positions = new Float32Array(count * 3), colors = new Float32Array(count * 3), normals = new Float32Array(count * 3);
+    const g = () => {                                   // N(0,1), clamped to ±2σ
+      const v = Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng());
+      return Math.max(-2, Math.min(2, v));
+    };
+    for (let i = 0; i < count; i++) {
+      const r = rng() * total;
+      let lo = 0, hi = m - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < r) lo = mid + 1; else hi = mid; }
+      const s = pool[lo];
+      splatRotation(cloud.rots, s, R);
+      const lx = Math.min(sigMax, cloud.scales[s * 3]) * g();
+      const ly = Math.min(sigMax, cloud.scales[s * 3 + 1]) * g();
+      const lz = Math.min(sigMax, cloud.scales[s * 3 + 2]) * g();
+      for (let c = 0; c < 3; c++) {
+        positions[i * 3 + c] = cloud.positions[s * 3 + c] + R[c * 3] * lx + R[c * 3 + 1] * ly + R[c * 3 + 2] * lz;
+        colors[i * 3 + c] = cloud.colors[s * 3 + c];
+      }
+      splatNormal(cloud, s, R, normals, i * 3);
+    }
+    return { count, positions, colors, normals };
+  }
+
   const k = Math.min(count, m);
   for (let i = 0; i < k; i++) {                 // partial Fisher–Yates
     const j = i + Math.floor(rng() * (m - i));
     const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
   }
   const positions = new Float32Array(k * 3), colors = new Float32Array(k * 3);
-  const normals = cloud.normals ? new Float32Array(k * 3) : null;
+  const normals = cloud.normals || shaped ? new Float32Array(k * 3) : null;
   for (let i = 0; i < k; i++) {
     const s = pool[i];
     for (let c = 0; c < 3; c++) {
       positions[i * 3 + c] = cloud.positions[s * 3 + c];
       colors[i * 3 + c] = cloud.colors[s * 3 + c];
-      if (normals) normals[i * 3 + c] = cloud.normals[s * 3 + c];
+      if (cloud.normals) normals[i * 3 + c] = cloud.normals[s * 3 + c];
     }
+    if (shaped && !cloud.normals) { splatRotation(cloud.rots, s, R); splatNormal(cloud, s, R, normals, i * 3); }
   }
   return { count: k, positions, colors, normals };
 }
@@ -776,7 +961,8 @@ export async function loadScan(buf, count, { decodeImage, seed = 1337 } = {}) {
     const fmt = detectFormat(buf);
     if (fmt === 'glb') src = parseGlb(buf);
     else if (fmt === 'ply') src = parsePly(buf);
-    else throw new Error('unrecognised scan format — expected .glb or .ply');
+    else if (fmt === 'spz') src = parseSpz(await gunzip(buf));
+    else throw new Error('unrecognised scan format — expected .glb, .ply or .spz');
   }
   let sampled;
   let source;
