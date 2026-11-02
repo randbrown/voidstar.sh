@@ -68,16 +68,36 @@ strip and the recordable-mix bus the recorder taps.
 
 ## limiter.js — clip insurance
 
-`makeLimiter(ctx, on)` → a `DynamicsCompressor` tuned as a hard brickwall (knee 0, ratio 20,
-attack 1 ms, release 100 ms, ceiling −1 dB). `setLimiterEngaged(node, on)` toggles by
-**transparency** (ratio 1 / threshold 0), not by reconnecting, so there's no click mid-set. Every
-track uses one **except the rig master** — Chromium's `DynamicsCompressor` imposes a fixed ~6 ms
-lookahead pre-delay even when transparent, which is monitoring latency on the live-instrument
-path, so the rig uses `makeSoftLimiter(ctx, on)`: a zero-latency soft-clip `WaveShaper`
-(bit-exact identity below −6 dBFS, tanh ease into the −1 dB ceiling, no oversampling). Trade-off:
-it clips the waveform on true overs (slight aliasing) instead of riding a gain envelope —
-acceptable for clip insurance. (The vocoder currently reimplements the compressor variant with a
-−1.5 dB ceiling — a known consolidation item in the backlog.)
+`makeLimiter(ctx, on, opts)` → a **lookahead brickwall** (`worklets/lookahead-limiter.js`, the
+LoudMax recipe): the audio is delayed by the lookahead, a sliding-window minimum of the gain each
+sample needs (ceiling / peak, stereo-linked) is held across that window, released with a smooth
+1-pole, and shaped by two cascaded moving averages that together span the lookahead. Because every
+value averaged into the gain at sample *n* already "saw" the sample it is applied to, the output
+never exceeds the ceiling (sample peak), yet the gain only moves along a smooth S-curve ramp — it
+never reshapes the waveform, so it stays clean even when driven hard. Below the ceiling it is a
+bit-exact delayed passthrough. Defaults: ceiling −1 dB, **5 ms** lookahead / 120 ms release on the
+playback buses (no more latency than the `DynamicsCompressor`'s fixed ~6 ms it replaced), and
+`makeRigLimiter` = **1.5 ms** / 100 ms on the rig master (live-monitor path). The freeze bus and
+the vocoder (−1.5 dB ceiling) use it too. `scripts/check-qualia-limiter.mjs` drives the real
+worklet DSP: ceiling held up to +24 dB of drive, exact latency, bit-exact passthrough, and a
++6 dB-driven 100 Hz sine at ~0.2 % THD (the old soft-clip curve: ~24 %).
+
+The returned node is a composite (input gain → worklet → output gain) that quacks like an
+AudioNode: `src.connect(lim)`, `lim.connect(dest)`, `lim.disconnect()`, `__qualiaBypassMute`
+(defaults on — a limiter is always the last hop), plus `setEngaged`, `getReductionDb`,
+`getLatencySeconds` and `dispose`. The worklet module loads asynchronously per context, so until it
+lands (a few ms) — or forever where AudioWorklet is unavailable — a **fallback** carries the audio:
+the old `DynamicsCompressor` brickwall on buses, the zero-latency soft-clip `WaveShaper`
+(`makeSoftLimiter`) on the rig; the worklet is crossfaded in over 50 ms. Tone's
+standardized-audio-context can't host a native `AudioWorkletNode`, so the sequencer passes
+`opts.createNode` (Tone's factory). `setLimiterEngaged(node, on)` toggles by **transparency** (the
+gain releases to unity, the delay stays), not by reconnecting, so there's no click or latency jump
+mid-set.
+
+Why it replaced the old designs: the soft-clip rig limiter was a memoryless tanh from −6 dBFS, so
+a hot or boosted rig was being saturated (un-oversampled, so aliased too) — that was the audible
+distortion. The bus `DynamicsCompressor` (ratio 20, 1 ms attack, 100 ms release, no hold) moves its
+gain inside a bass cycle and overshoots fast transients.
 
 The rig master is also the **pause brake**. Every audible rig path — the live instrument monitor,
 the loop bus, the freeze stack, the record count-in — sums at `rigMaster` before the limiter and
@@ -94,12 +114,13 @@ it the rig fader lived pinned at max while the other channels sat halfway. Appli
 (inside `effRig()`), so the live signal, loops, and freeze pads scale together and the strip's
 drive/amp stages (which assume a reference input level) are untouched; the count-in pips divide it
 back out. On top of that the fader itself runs past unity into **boost** (`RIG_LEVEL_MAX`, 0–2×);
-boost is safe because it drives the soft limiter (gain into a
+boost is safe because it drives the lookahead limiter (gain into a
 brickwall = loudness maximizer), and `looper.js` **force-engages** the rig limiter whenever the
-level sits above 1.0 (`setRigLimiter` refuses to disengage while boosted). Because the soft
-clipper is memoryless, its gain reduction is exact math on the pre-limiter peak:
-`softLimiterReductionDb(peak)` + the rig's pre-limiter `outputAnalyser` feed
-`looper-audio.getRigReductionDb()`, which drives the mixer's rig GR bar.
+level sits above 1.0 (`setRigLimiter` refuses to disengage while boosted). The worklet posts its
+own gain reduction (~every 20 ms while reducing), which `looper-audio.getRigReductionDb()` returns
+for the mixer's rig GR bar; while the soft-clip fallback is live, GR is exact math on the
+pre-limiter peak instead (`softLimiterReductionDb(peak)` + the rig's `outputAnalyser`). The rig
+latency readout includes the limiter's 1.5 ms.
 
 ---
 
@@ -260,7 +281,7 @@ one worklet node:
 
 Captures are trained at wildly different output levels — well over 10 dB apart. That matters more
 here than in a plugin host, because the amp's output feeds four things that care about absolute
-level: the PA, the mixer's soft limiter, recorded loops (the recorder taps the strip *output*), and
+level: the PA, the rig master limiter, recorded loops (the recorder taps the strip *output*), and
 **visual reactivity** — `sigAnalyser` is adopted into the mix as the `rig` source, so a hot capture
 literally makes the fx more excitable.
 

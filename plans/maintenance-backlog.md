@@ -46,8 +46,8 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 3. **`fx-helpers.js`.** `ema`/`damp`/`decay`, idle-spectrum sine fallback, fade-fill,
    smoothed-pose-target, `hslToRgb`, `drawFullscreen` (webgl) are reinvented across nearly every fx
    (~6 hand-rolled EMA variants). Centralizing also kills per-fx allocation drift.
-4. **Reuse `limiter.js` in the vocoder** (it reimplements `makeLimiter`/`setLimiterEngaged` with a
-   −1.5 dB ceiling) — parameterize the ceiling.
+4. ✅ **Reuse `limiter.js` in the vocoder** — *done:* `makeLimiter(ctx, on, { ceilingDb: -1.5 })`
+   (the shared lookahead limiter now takes a ceiling option).
 5. ✅ **Move the `getUserMedia` ladder into `devices.js`** — *done:* `openMicStream(deviceId, base)`
    holds the try-exact-then-default fallback ladder; `audio.js` and `vocoder.js` each keep their own
    `MIC_CONSTRAINTS` (stereo vs low-latency hint) and pass it in. **Needs a mic smoke test:** mic

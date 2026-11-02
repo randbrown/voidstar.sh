@@ -112,8 +112,8 @@ grab; *clear* releases the whole stack. The `frz` button shows the depth (`frz²
 
 **Constant-loudness bus.** All pads sum through one gain node scaled `level / √N` — incoherent
 layers add ~√N in RMS, so the total loudness stays roughly steady as you stack (pop and the
-remaining layers swell back up) — then a zero-latency **soft-clip limiter** on the bus catches
-coherent overshoot so a deep stack can never clip the rig sum (`makeSoftLimiter`, always engaged
+remaining layers swell back up) — then a lookahead **brickwall limiter** on the bus catches
+coherent overshoot so a deep stack can never clip the rig sum (`makeLimiter`, always engaged
 on the freeze bus). Graph: `pad.source → pad.gain (fade) → freezeBus (level/√N) → freezeLimiter →
 rigMaster`.
 
