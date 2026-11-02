@@ -536,7 +536,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // so a stack of loud hits can't push full-scale into the device-level sum.
     // Created once and reused across kit swaps.
     if (!seqLimiter) {
-      seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
+      // Tone's rawContext is a standardized-audio-context wrapper, so the
+      // limiter's worklet node must come from Tone's factory, not a native
+      // `new AudioWorkletNode` (which can't attach to the wrapped context).
+      seqLimiter = makeLimiter(rawCtx, _seqLimiterOn, {
+        createNode: (name, options) => Tone.getContext().createAudioWorkletNode(name, options),
+      });
       seqLimiter.__qualiaBypassMute = true;
       seqLimiter.connect(rawDest);
     }

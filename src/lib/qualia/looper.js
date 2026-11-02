@@ -4531,7 +4531,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // signal and LAYERS it onto a stack — tap again to layer another pad over
   // the last. `pop` (`'`) removes the top layer with a release fade; re-frz
   // (`\`) replaces the top with a fresh grab; clear releases the whole stack.
-  // The engine sums all pads through a constant-RMS bus + soft limiter so the
+  // The engine sums all pads through a constant-RMS bus + brickwall limiter so the
   // stack holds a steady loudness and never clips (looper-audio). Needs the
   // capture ring, so a grab opens capture if the signal fader is up.
   async function freezePush() {

@@ -308,7 +308,7 @@ export function createAudioFilePlayer(opts = {}) {
       buffer = null; name = '';
       try { analyser?.disconnect(); } catch {}
       try { bus?.disconnect(); } catch {}
-      try { limiter?.disconnect(); } catch {}
+      try { limiter?.dispose(); } catch {}
       if (ctx) { try { ctx.close(); } catch {} ctx = null; }
     },
   };

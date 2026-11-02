@@ -47,6 +47,7 @@ import { registerContext, resumeContext } from './audio-unlock.js';
 import { createVoiceShifter } from './voice-shifter.js';
 import { VOX_PRESETS } from './vox-presets.js';
 import { makeDraggablePanel } from './panel-pos.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 const NS              = 'voidstar.qualia.vocoder';
 const PANEL_OPEN_KEY  = `${NS}.panelOpen`;
@@ -604,10 +605,9 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     postComp = c.createDynamicsCompressor();
     postComp.knee.value = 8; postComp.attack.value = 0.006; postComp.release.value = 0.15;
     applyCompressMacro(postComp, cfg.compress);
-    postLimiter = c.createDynamicsCompressor();
-    postLimiter.threshold.value = -1.5; postLimiter.knee.value = 0;
-    postLimiter.ratio.value = 20; postLimiter.attack.value = 0.002; postLimiter.release.value = 0.05;
-    applyVoxLimiter();   // honor cfg.limiter (transparent when the user bypassed it)
+    // Shared lookahead brickwall (limiter.js) at vox's hand-tuned -1.5 dBFS
+    // ceiling; honors cfg.limiter (transparent when the user bypassed it).
+    postLimiter = makeLimiter(c, cfg.limiter !== false, { ceilingDb: -1.5 });
 
     outBus.connect(postLowcut);
     postLowcut.connect(postMud);
@@ -873,7 +873,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     }
     if (postComp)    { disc(postComp);     postComp     = null; }
     if (outputGain){ disc(outputGain); outputGain= null; }
-    if (postLimiter) { disc(postLimiter);  postLimiter  = null; }
+    if (postLimiter) { try { postLimiter.dispose(); } catch {} postLimiter = null; }
     if (muteGate)  { disc(muteGate);  muteGate  = null; }
     if (vocoderMix){ disc(vocoderMix); vocoderMix = null; }
     if (feedAnalyser){ disc(feedAnalyser); feedAnalyser = null; }
@@ -1255,14 +1255,10 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     } catch {}
   }
   // Master brickwall limiter (postLimiter) bypass — "off" makes it transparent
-  // (ratio 1) rather than rerouting the graph, so toggling never clicks. The
-  // ceiling stays at -1.5 dBFS when engaged (vox's hand-tuned value).
+  // (gain released to unity) rather than rerouting the graph, so toggling
+  // never clicks. The ceiling stays at -1.5 dBFS when engaged.
   function applyVoxLimiter() {
-    if (!postLimiter) return;
-    try {
-      postLimiter.ratio.value     = cfg.limiter === false ? 1 : 20;
-      postLimiter.threshold.value = cfg.limiter === false ? 0 : -1.5;
-    } catch {}
+    if (postLimiter) setLimiterEngaged(postLimiter, cfg.limiter !== false);
   }
   function setLimiter(on) {
     cfg.limiter = !!on;
