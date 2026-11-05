@@ -218,11 +218,22 @@ function openTextSheet({ initial = '', title = 'Text', confirmLabel = 'Add', can
       b.addEventListener('click', fn);
       return b;
     };
+    let done = false;
     const finish = (value) => {
+      if (done) return;
+      done = true;
       document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('hashchange', onNav);
       backdrop.remove();
       resolve(value);
     };
+    // The backdrop lives on <body>, outside the route root, so a navigation
+    // while the sheet is open (back gesture, route change) used to strand it:
+    // a full-screen z-index:1000 layer eating every tap and scroll on every
+    // later page until the app was killed.
+    const onNav = () => finish(null);
+    window.addEventListener('hashchange', onNav);
+    backdrop.addEventListener('sl-dismiss', onNav);
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); finish(null); }
       // Plain Enter is a newline; Ctrl/Cmd+Enter commits on a hardware keyboard.
@@ -312,7 +323,16 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   // finger on empty space scrolls. While the pen is down, touches are
   // ignored outright, which is palm rejection.
   let stylusMode = readStylusMode() === '1';
+  // penDown gates palm rejection, so a missed pen-up must never latch it:
+  // a stuck flag silently drops EVERY finger touch — no scroll, no select —
+  // until the editor is rebuilt. Lifts are caught document-wide (the pen
+  // can leave the canvas, or a dialog can swallow its pointerup), a hover
+  // move (buttons 0) proves the tip is up, and a flag with no pen activity
+  // for a few seconds is treated as stale.
   let penDown = false;
+  let penSeenAt = 0;
+  const PEN_STALE_MS = 3000;
+  const penIsDown = () => penDown && performance.now() - penSeenAt < PEN_STALE_MS;
   const fingerEdits = (e) => stylusMode && e.pointerType === 'touch';
 
   // ── Pinch to resize the selection ──
@@ -494,13 +514,14 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   function startStroke(e) {
     if (e.pointerType === 'pen') {
       penDown = true;
+      penSeenAt = performance.now();
       // First stylus contact on this device turns pen mode on (unless the
       // user has explicitly switched it off before).
       if (!stylusMode && readStylusMode() === null) {
         setStylusMode(true);
         onNotice?.('pen mode on: pen draws, finger scrolls & moves (⋯ to turn off)');
       }
-    } else if (penDown && e.pointerType === 'touch') {
+    } else if (e.pointerType === 'touch' && penIsDown()) {
       return; // palm rejection: no finger input while the pen is down
     }
     // A new primary pointer means every finger has lifted, so anything still
@@ -643,6 +664,10 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   function moveStroke(e) {
     // Keep every tracked finger's last position current, so the moment a
     // second finger lands the scroll deltas start from here (no jump).
+    if (e.pointerType === 'pen') {
+      if (e.buttons === 0) penDown = false; // hovering: the tip is up
+      else penSeenAt = performance.now();
+    }
     const tracked = activePointers.get(e.pointerId);
     // Untracked = hovering (mouse, S Pen hover) or a palm-rejected touch:
     // neither may drive a stroke or a selection drag.
@@ -815,6 +840,9 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   canvas.addEventListener('pointerup', endStroke, { signal });
   canvas.addEventListener('pointerleave', endStroke, { signal });
   canvas.addEventListener('pointercancel', cancelStroke, { signal });
+  const penLifted = (e) => { if (e.pointerType === 'pen') penDown = false; };
+  document.addEventListener('pointerup', penLifted, { capture: true, signal });
+  document.addEventListener('pointercancel', penLifted, { capture: true, signal });
   canvas.style.touchAction = 'none';
 
   // Toolbar wiring
