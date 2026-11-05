@@ -1385,6 +1385,10 @@ JetBrains Mono, so their footprint doesn't change.
   the wait); on empty space it scrolls. Touches are ignored while the pen is
   down (palm rejection). The pen landing off a finger-grabbed selection ends
   that session and draws.
+  The pen-down flag can't latch: pen lifts are caught document-wide, a
+  pen hover move (`buttons === 0`) clears it, and it goes stale after 3 s
+  without pen activity. A missed pen-up used to drop every finger touch
+  (no scroll, no select) until the editor was rebuilt.
 - **Pinch to resize:** with the select session's first finger on the
   selected element, a second finger scales it. Text scales its font size;
   ink scales its geometry about the bbox center. Anywhere else, two fingers
@@ -1586,6 +1590,19 @@ not classes). Constraints to preserve:
   unsaved it's honored as a real exit. Any other teardown (hashchange
   while drawing) auto-saves dirty ink on the way out, and `beforeunload`
   warns + best-effort-saves on reload/close.
+- **Leaving the editor walks history back; it never pushes.** Each editor
+  entry is stamped (`history.state.slAnnPrev`, via `getPrevHash()` from the
+  router's `hashchange.oldURL`) with the hash it was opened from. Done, the
+  ← arrow and make-doc go `history.go(-2|-1)` when that hash is the song
+  page (else `location.replace(backHash)`), and a back gesture off a clean
+  editor is a real `history.back()`. The old `navigate(backHash)` exits left
+  `[song, editor, guard, song]` on the stack, so back from the song page
+  reopened the editor, whose back pushed the song page again: an endless
+  song⇄editor loop with no way back to the setlist short of killing the app.
+- **The text sheet can't outlive its route.** Its backdrop sits on `<body>`
+  (full-screen, z-index 1000), so it closes itself on `hashchange`, and a
+  back gesture while it's open dismisses only the sheet (the guard
+  re-arms). A stranded backdrop used to swallow every tap and scroll.
 - **Pen color is remembered.** The color picker defaults to the last-used
   ink (`voidstar.setlist.annColor`; scratch mode has its own
   `…annColorScratch` memory, falling back to near-black — on paper, dark

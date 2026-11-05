@@ -15,6 +15,13 @@ export function navigate(hash) {
   location.hash = hash;
 }
 
+// The hash the last hashchange navigated AWAY from ('' on a fresh load).
+// The annotation editor stamps it onto its history entry so leaving can
+// walk history back instead of pushing yet another entry (see
+// renderAnnotation's history guard).
+let _prevHash = '';
+export function getPrevHash() { return _prevHash; }
+
 // Re-render the current route in place. Needed because navigate() only sets
 // location.hash, and assigning it its *current* value fires no hashchange —
 // so handlers that "navigate" to the page they're already on (to reflect an
@@ -216,6 +223,10 @@ function watchFocusSync() {
 
 export function initSetlistApp(root) {
   _root = root;
+  // Registered before route() so views rendering on this change read it.
+  window.addEventListener('hashchange', (e) => {
+    try { _prevHash = new URL(e.oldURL).hash; } catch { _prevHash = ''; }
+  });
   window.addEventListener('hashchange', route);
   // Auto-push every local write to Drive (debounced; a no-op until a backup
   // client exists). Wired here — not in any view — so edits made on a fresh
