@@ -242,7 +242,9 @@ export default {
 
   params: [
     { id: 'scan',      label: 'scan file',  type: 'file', accept: '.glb,.ply,.spz', default: null },
-    { id: 'source',    label: 'source',     type: 'select', options: ['scan', 'monolith', ...PROCEDURAL_NAMES], default: 'scan' },
+    // The no-file default sits right under 'scan'; the monolith goes last.
+    { id: 'source',    label: 'source',     type: 'select', default: 'scan',
+      options: ['scan', DEFAULT_CLOUD, ...PROCEDURAL_NAMES.filter(n => n !== DEFAULT_CLOUD), 'monolith'] },
     { id: 'mode',      label: 'mode',       type: 'select', options: MODES, default: 'ripple' },
     { id: 'points',    label: 'points',     type: 'select', options: COUNT_OPTS, default: '200000' },
     { id: 'orient',    label: 'orient',     type: 'select', options: ORIENT_OPTS, default: 'auto' },
