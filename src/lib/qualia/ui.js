@@ -113,7 +113,7 @@ export function buildParamPanel({
   for (const spec of params) {
     state[spec.id] = spec.default;
 
-    const row = el('div', { class: 'qp-row' });
+    const row = el('div', { class: spec.type === 'file' ? 'qp-row qp-row-file' : 'qp-row' });
     // Build a small "reactive" indicator dot for any param that declares
     // modulators. Inlined in JS rather than via CSS::before because the
     // Astro CSS scoping in this page doesn't reach JS-created elements
@@ -153,7 +153,7 @@ export function buildParamPanel({
     // id and the code that drives it (same id qset()/qualia.set() take).
     label.title = `id: ${spec.id} — qualia.set('${spec.id}', …) / qset("${spec.id}", …)`;
 
-    let control;
+    let control, pickBtn = null, clearBtn = null;
     if (spec.type === 'range') {
       control = el('input', {
         type: 'range',
@@ -206,26 +206,49 @@ export function buildParamPanel({
         onChange?.(spec.id, v);
       });
     } else if (spec.type === 'file') {
+      // The native input stays hidden: its "No file chosen" text can't be
+      // changed, so it would contradict a file the fx restored itself (and
+      // eat the room the name needs). A small button opens it instead; the
+      // name lives in the label's value span.
       control = el('input', {
         type: 'file',
         class: 'qp-file',
         accept: spec.accept ?? '',
+        style: { display: 'none' },
       });
+      pickBtn = el('button', { type: 'button', class: 'qp-file-btn', title: 'choose a file' });
+      pickBtn.textContent = 'choose…';
+      pickBtn.addEventListener('click', () => control.click());
+      // × forgets the file (the fx decides what "no file" means). Hidden
+      // while nothing is set.
+      clearBtn = el('button', { type: 'button', class: 'qp-file-btn qp-file-clear', title: 'clear file' });
+      clearBtn.textContent = '×';
+      clearBtn.hidden = true;
       control.addEventListener('change', () => {
         const f = control.files && control.files[0] ? control.files[0] : null;
         state[spec.id] = f;
         valSpan.textContent = fmt(spec, f);
+        valSpan.title = f ? f.name : '';
+        clearBtn.hidden = !f;
         onChange?.(spec.id, f);
         // Reset so the same file can be picked again later (browsers ignore
         // a second change event for an identical selection otherwise).
         if (!f) control.value = '';
       });
+      clearBtn.addEventListener('click', () => {
+        control.value = '';
+        state[spec.id] = null;
+        valSpan.textContent = fmt(spec, null);
+        valSpan.title = '';
+        clearBtn.hidden = true;
+        onChange?.(spec.id, null);
+      });
     } else {
       continue;
     }
 
-    refs[spec.id] = { spec, control, valSpan };
-    row.append(label, control);
+    refs[spec.id] = { spec, control, valSpan, clearBtn };
+    row.append(label, clearBtn ? el('span', { class: 'qp-file-wrap' }, [control, pickBtn, clearBtn]) : control);
     container.append(row);
 
     // Modulation badges — one pill per modulator, with a live meter that
@@ -320,6 +343,8 @@ export function buildParamPanel({
     } else if (r.spec.type === 'file') {
       // No way to write a value back into a <input type="file"> programmatically
       // — just refresh the label. The underlying File reference is kept in state.
+      r.valSpan.title = v ? v.name : '';
+      if (r.clearBtn) r.clearBtn.hidden = !v;
     }
     r.valSpan.textContent = fmt(r.spec, v);
   }
