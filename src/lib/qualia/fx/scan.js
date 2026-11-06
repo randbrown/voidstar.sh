@@ -46,6 +46,9 @@ import { loadLastScan, saveLastScan } from '../scan-store.js';
 const COUNT_OPTS = ['50000', '100000', '200000', '400000'];
 const MODES      = ['strata', 'ripple', 'shatter', 'sweep'];
 const PALETTES   = ['scan', 'mono', 'thermal', 'void'];
+// 'auto' levels on the floor/tabletop it finds; the rest override the file's
+// up axis for models exported lying on their side (see ORIENTS in scan-cloud).
+const ORIENT_OPTS = ['auto', 'as-is', 'z-up', '-z-up', 'x-up', '-x-up', 'flip'];
 const SPEC_N     = 32;
 const RINGS      = 4;
 const RING_IDLE  = 99;        // age that marks a ring slot as unused
@@ -236,6 +239,7 @@ export default {
     { id: 'source',    label: 'source',     type: 'select', options: ['scan', 'monolith'], default: 'scan' },
     { id: 'mode',      label: 'mode',       type: 'select', options: MODES, default: 'ripple' },
     { id: 'points',    label: 'points',     type: 'select', options: COUNT_OPTS, default: '200000' },
+    { id: 'orient',    label: 'orient',     type: 'select', options: ORIENT_OPTS, default: 'auto' },
     { id: 'palette',   label: 'palette',    type: 'select', options: PALETTES, default: 'scan' },
     { id: 'pointSize', label: 'point size', type: 'range', min: 0.3, max: 4, step: 0.05, default: 1.2,
       modulators: [{ source: 'audio.rms', mode: 'mul', amount: 0.30 }] },
@@ -425,10 +429,11 @@ export default {
       const failed = shared.failedSerial === shared.serial;
       const useScan = params.source !== 'monolith' && !!shared.source && !failed;
       const count = parseInt(params.points, 10) || 200000;
-      const key = `${useScan ? `s${shared.serial}` : 'mono'}|${count}`;
+      const orient = ORIENT_OPTS.includes(params.orient) ? params.orient : 'auto';
+      const key = `${useScan ? `s${shared.serial}` : 'mono'}|${count}|${orient}`;
       if (worker && shared.restore === 'done' && key !== shared.cloudKey && key !== pendingKey && !(failed && points)) {
         pendingKey = key;
-        worker.postMessage({ id: ++reqId, bytes: useScan ? shared.source.bytes : null, count });
+        worker.postMessage({ id: ++reqId, bytes: useScan ? shared.source.bytes : null, count, orient });
       }
 
       // ── Uniforms ───────────────────────────────────────────────────────

@@ -134,6 +134,33 @@ console.log('scan: GLB (tilted box on slab)');
   check('rejects a Draco GLB with a clear error when no decoder is given', /Draco/.test(threw), threw);
 }
 
+// ── Orientation: flat body parts must not become "the floor" ───────────────
+console.log('scan: orientation');
+{
+  // A standing post with a big vertical "backpack" plate on its side and no
+  // floor — the plate is the dominant plane, but must not lay the post down.
+  const pos = [], idx = [], uv = [];
+  const quad = (a, b, c, d) => { const i = pos.length / 3; for (const v of [a, b, c, d]) { pos.push(...v); uv.push(0, 0); } idx.push(i, i + 1, i + 2, i, i + 2, i + 3); };
+  const w = 0.08, h = 1.0;
+  quad([-w, 0, w], [w, 0, w], [w, h, w], [-w, h, w]);
+  quad([w, 0, -w], [-w, 0, -w], [-w, h, -w], [w, h, -w]);
+  quad([w, 0, w], [w, 0, -w], [w, h, -w], [w, h, w]);
+  quad([-w, 0, -w], [-w, 0, w], [-w, h, w], [-w, h, -w]);
+  quad([-0.3, 0.2, -w - 0.02], [0.3, 0.2, -w - 0.02], [0.3, 0.8, -w - 0.02], [-0.3, 0.8, -w - 0.02]);   // plate
+  const post = { pos: new Float32Array(pos), uv: new Float32Array(uv), idx: new Uint32Array(idx) };
+  const c = await loadScan(makeGlb(post), 30000, { decodeImage });
+  let ymax = 0, xmax = 0;
+  for (let i = 0; i < c.count; i++) { ymax = Math.max(ymax, c.positions[i * 3 + 1]); xmax = Math.max(xmax, Math.abs(c.positions[i * 3])); }
+  check('vertical plate does not lay the figure down', !c.stats.leveled && ymax > 0.9 && xmax < 0.5, `leveled=${c.stats.leveled} ymax=${ymax.toFixed(2)} xmax=${xmax.toFixed(2)}`);
+
+  // The same box-on-slab exported Z-up: `orient: z-up` stands it upright.
+  const g = boxOnSlab(0), zp = Float32Array.from(g.pos);
+  for (let i = 0; i < zp.length; i += 3) { const y = zp[i + 1], z = zp[i + 2]; zp[i + 1] = -z; zp[i + 2] = y; }
+  const cz = await loadScan(makeGlb({ ...g, pos: zp }), 30000, { decodeImage, orient: 'z-up' });
+  const sz = figureStats(cz);
+  check('orient z-up stands a Z-up file upright', cz.stats.groundFound && cz.stats.tiltDeg < 1 && sz.ymax > 0.9, `ground=${cz.stats.groundFound} tilt=${cz.stats.tiltDeg} ymax=${sz.ymax.toFixed(2)}`);
+}
+
 // ── Draco + per-part colours ────────────────────────────────────────────────
 // Loads three's Draco builds the same way scan-worker.js does (evaluated in a
 // function scope); under node the Emscripten glue also wants require/__dirname.

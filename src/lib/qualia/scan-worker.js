@@ -4,7 +4,7 @@
 // main thread would hitch the render loop and the Strudel cyclist.
 //
 // Protocol (main ⇄ worker):
-//   → { id, bytes: ArrayBuffer|null, count }   bytes=null → procedural monolith
+//   → { id, bytes: ArrayBuffer|null, count, orient }   bytes=null → monolith
 //   ← { id, cloud }                            typed arrays transferred
 //   ← { id, error }
 //
@@ -53,9 +53,9 @@ function loadDraco() {
 }
 
 self.onmessage = async (e) => {
-  const { id, bytes, count } = e.data || {};
+  const { id, bytes, count, orient } = e.data || {};
   try {
-    const cloud = await loadScan(bytes || null, count, { decodeImage, loadDraco });
+    const cloud = await loadScan(bytes || null, count, { decodeImage, loadDraco, orient });
     self.postMessage({ id, cloud }, [
       cloud.positions.buffer, cloud.colors.buffer, cloud.normals.buffer,
       cloud.dist.buffer, cloud.fig.buffer, cloud.rand.buffer,

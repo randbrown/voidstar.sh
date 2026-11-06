@@ -19,7 +19,9 @@
 //   3. LEVEL   — RANSAC finds the dominant plane (the tabletop / floor),
 //                PCA-refines it, and rotates the cloud so it lies on y = 0
 //                with the subject above. Scans are rarely exported level.
-//                It only counts as ground if ~nothing lies beneath it.
+//                It only counts as ground if ~nothing lies beneath it, and
+//                only ground may rotate the cloud a long way (see buildCloud).
+//                An `orient` preset overrides the file's up axis.
 //   4. FRAME   — points above the plane are the "figure"; the cloud is
 //                centred on it and scaled so the figure is ~1 unit tall.
 //                Far-off ground is cropped.
@@ -891,7 +893,59 @@ function surfaceDistance(P, fig, count, out) {
 }
 
 /** Level, frame, crop and annotate a sampled cloud. */
-export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
+// Manual orientation presets (row-major 3×3, p' = R·p) for files exported
+// with a non-glTF up axis. Anything but 'auto' also stops the auto-level
+// from making big rotations or flips — the performer's choice wins.
+export const ORIENTS = {
+  'as-is':  [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  'z-up':   [1, 0, 0, 0, 0, 1, 0, -1, 0],
+  '-z-up':  [1, 0, 0, 0, 0, -1, 0, 1, 0],
+  'x-up':   [0, -1, 0, 1, 0, 0, 0, 0, 1],
+  '-x-up':  [0, 1, 0, -1, 0, 0, 0, 0, 1],
+  'flip':   [1, 0, 0, 0, -1, 0, 0, 0, -1],
+};
+const COS30 = Math.cos(Math.PI / 6);
+
+// Share of the off-plane points (height > 2·eps) whose projection onto the
+// plane lies inside the plane's own extent. A floor or tabletop surrounds
+// what stands on it (≈1); a plate on a robot's back is smaller than the body
+// it's attached to.
+function footprintInside(P, count, plane, eps) {
+  const [nx, ny, nz] = plane.normal;
+  const ref = Math.abs(nx) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  let ax = ny * ref[2] - nz * ref[1], ay = nz * ref[0] - nx * ref[2], az = nx * ref[1] - ny * ref[0];
+  const al = Math.hypot(ax, ay, az); ax /= al; ay /= al; az /= al;
+  const bx = ny * az - nz * ay, by = nz * ax - nx * az, bz = nx * ay - ny * ax;
+  const step = Math.max(1, Math.floor(count / 20000));
+  const iu = [], iv = [], ou = [], ov = [];
+  for (let i = 0; i < count; i += step) {
+    const s = i * 3, x = P[s], y = P[s + 1], z = P[s + 2];
+    const h = nx * x + ny * y + nz * z + plane.d;
+    const u = ax * x + ay * y + az * z, v = bx * x + by * y + bz * z;
+    if (Math.abs(h) < eps) { iu.push(u); iv.push(v); } else if (h > 2 * eps) { ou.push(u); ov.push(v); }
+  }
+  if (!ou.length || iu.length < 10) return 0;
+  const q = (a, f) => a[Math.floor(f * (a.length - 1))];
+  iu.sort((a, b) => a - b); iv.sort((a, b) => a - b);
+  const u0 = q(iu, 0.02), u1 = q(iu, 0.98), v0 = q(iv, 0.02), v1 = q(iv, 0.98);
+  const mu = (u1 - u0) * 0.05, mv = (v1 - v0) * 0.05;
+  let inside = 0;
+  for (let k = 0; k < ou.length; k++) if (ou[k] >= u0 - mu && ou[k] <= u1 + mu && ov[k] >= v0 - mv && ov[k] <= v1 + mv) inside++;
+  return inside / ou.length;
+}
+
+function rotateCloud(P, Nm, count, R) {
+  for (const A of Nm ? [P, Nm] : [P]) {
+    for (let i = 0; i < count; i++) {
+      const s = i * 3, x = A[s], y = A[s + 1], z = A[s + 2];
+      A[s] = R[0] * x + R[1] * y + R[2] * z;
+      A[s + 1] = R[3] * x + R[4] * y + R[5] * z;
+      A[s + 2] = R[6] * x + R[7] * y + R[8] * z;
+    }
+  }
+}
+
+export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto' } = {}) {
   let { count, positions: P, colors: C, normals: Nm } = sampled;
   rng ||= mulberry32(1);
 
@@ -905,8 +959,26 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
   const diag = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) || 1;
   const eps = diag * 0.006;
 
-  // 1. Level on the dominant plane (if there is one).
-  const plane = findGroundPlane(P, count, eps, rng);
+  // 0. Manual orientation first, if the performer picked one.
+  const manual = orient !== 'auto' && ORIENTS[orient];
+  if (manual) rotateCloud(P, Nm, count, manual);
+
+  // 1. Level on the dominant plane — but only when that's safe:
+  //    - real ground (≈nothing beneath it, and it surrounds what stands on
+  //      it, e.g. a tabletop): any tilt;
+  //    - any other plane: only if it's already within 30° of horizontal
+  //      (small tilt, or an upside-down y-down splat export).
+  //    Otherwise a flat body part (a robot's backpack, a solar panel) would
+  //    get rotated into "the floor" and lay the model on its side; the
+  //    file's own up axis is trusted instead.
+  //    In manual mode nothing flips: the plane's normal is kept pointing up.
+  let found = findGroundPlane(P, count, eps, rng);
+  if (found && manual && found.normal[1] < 0) found = { ...found, normal: found.normal.map(v => -v), d: -found.d };
+  const nearlyFlat = !!found && Math.abs(found.normal[1]) > COS30;
+  // The footprint test only matters when the plane would rotate the cloud a
+  // long way; near-horizontal planes are cheap to trust.
+  const isGround = !!found && found.offFrac < 0.1 && (nearlyFlat || footprintInside(P, count, found, eps) >= 0.9);
+  const plane = (manual ? nearlyFlat : isGround || nearlyFlat) ? found : null;
   const height = new Float32Array(count);
   let tiltDeg = 0;
   if (plane) {
@@ -939,7 +1011,7 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
   let fig = new Uint8Array(count);
   let nFig = 0;
   if (plane) for (let i = 0; i < count; i++) if (height[i] > 2 * eps) { fig[i] = 1; nFig++; }
-  const hasGround = !!plane && plane.offFrac < 0.1 && nFig >= count * 0.02;
+  const hasGround = !!plane && isGround && nFig >= count * 0.02;
   if (!hasGround) { fig.fill(1); nFig = count; }
 
   // 3. Centre on the figure (median x/z) and scale it to ~1 unit tall.
@@ -1011,7 +1083,8 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
     dist, fig: figF, rand,
     stats: {
       count, figurePoints: fig.reduce((a, b) => a + b, 0), groundFound: hasGround,
-      groundInlierFrac: plane ? +plane.inlierFrac.toFixed(3) : 0, belowPlaneFrac: plane ? +plane.offFrac.toFixed(3) : 0,
+      groundInlierFrac: found ? +found.inlierFrac.toFixed(3) : 0, belowPlaneFrac: found ? +found.offFrac.toFixed(3) : 0,
+      leveled: !!plane, orient,
       tiltDeg: +tiltDeg.toFixed(1),
       figHeight: +figHeight.toFixed(3),
     },
@@ -1027,7 +1100,7 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
  *   wrapped because Emscripten modules are thenables (returning one bare from
  *   a promise chain never settles). Only called for KHR_draco_mesh_compression GLBs.
  */
-export async function loadScan(buf, count, { decodeImage, loadDraco, seed = 1337 } = {}) {
+export async function loadScan(buf, count, { decodeImage, loadDraco, orient = 'auto', seed = 1337 } = {}) {
   const rng = mulberry32(seed);
   let src;
   if (!buf) src = monolithMesh();
@@ -1052,7 +1125,7 @@ export async function loadScan(buf, count, { decodeImage, loadDraco, seed = 1337
     sampled = samplePoints(src, count, rng);
     source = { kind: src.splat ? 'splat' : 'points', verts: src.positions.length / 3 };
   }
-  const cloud = buildCloud(sampled, { rng });
+  const cloud = buildCloud(sampled, { rng, orient });
   cloud.stats.source = source;
   return cloud;
 }
