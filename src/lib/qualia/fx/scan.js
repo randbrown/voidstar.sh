@@ -28,7 +28,9 @@
 // Inline: beat rising edge → ripple launch; spectrum → strata bands;
 //   pose head.x → orbit offset, pose headPitch → camera elevation (smoothed).
 //
-// Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is kept in
+// Built-in sources (no file): `source` = monolith or one of the procedural
+// clouds in scan-procedural.js — xeno, atom, neuron, circuit, lorenz,
+// calabi-yau. Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is kept in
 // IndexedDB (scan-store.js) and restored on reload; with nothing loaded (or
 // `source: monolith`) a procedural monolith runs through the same pipeline.
 // GLB: plain or Draco-compressed (decoder lazy-loaded in the worker; meshopt
@@ -42,6 +44,7 @@ import {
 import { applyAudioUniforms, disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
 import { loadLastScan, saveLastScan } from '../scan-store.js';
+import { PROCEDURAL_NAMES } from '../scan-procedural.js';
 
 const COUNT_OPTS = ['50000', '100000', '200000', '400000'];
 const MODES      = ['strata', 'ripple', 'shatter', 'sweep'];
@@ -236,7 +239,7 @@ export default {
 
   params: [
     { id: 'scan',      label: 'scan file',  type: 'file', accept: '.glb,.ply,.spz', default: null },
-    { id: 'source',    label: 'source',     type: 'select', options: ['scan', 'monolith'], default: 'scan' },
+    { id: 'source',    label: 'source',     type: 'select', options: ['scan', 'monolith', ...PROCEDURAL_NAMES], default: 'scan' },
     { id: 'mode',      label: 'mode',       type: 'select', options: MODES, default: 'ripple' },
     { id: 'points',    label: 'points',     type: 'select', options: COUNT_OPTS, default: '200000' },
     { id: 'orient',    label: 'orient',     type: 'select', options: ORIENT_OPTS, default: 'auto' },
@@ -338,16 +341,16 @@ export default {
         const key = pendingKey;
         pendingKey = '';
         if (error) {
-          console.warn('[qualia] scan: could not load', shared.source?.name || 'monolith', '—', error);
+          console.warn('[qualia] scan: could not load', key.split('|')[0], '—', error);
           // Don't retry the same bad file every frame. update() keeps the
           // cloud already on stage, or falls back to the monolith if none.
-          if (key.startsWith('s')) shared.failedSerial = shared.serial;
+          if (key.startsWith('file:')) shared.failedSerial = shared.serial;
           shared.cloudKey = key;
           return;
         }
         shared.cloud = cloud;
         shared.cloudKey = key;
-        console.info('[qualia] scan: loaded', shared.source?.name || 'monolith', cloud.stats);
+        console.info('[qualia] scan: loaded', key.split('|')[0], cloud.stats);
         setCloud(cloud);
       };
       worker.onerror = (err) => console.warn('[qualia] scan worker error', err?.message || err);
@@ -424,16 +427,20 @@ export default {
           shared.source = { name: f.name, bytes };
           shared.serial++;
           saveLastScan(f.name, bytes);
+          // Picking a file means "show me this file" — leave a built-in source.
+          try { globalThis.qualia?.setParam?.('scan', 'source', 'scan'); } catch { /* panel not up */ }
         }).catch((e) => console.warn('[qualia] scan: could not read file', e));
       }
       const failed = shared.failedSerial === shared.serial;
-      const useScan = params.source !== 'monolith' && !!shared.source && !failed;
+      const procedural = PROCEDURAL_NAMES.includes(params.source) ? params.source : null;
+      const useScan = params.source === 'scan' && !!shared.source && !failed;
       const count = parseInt(params.points, 10) || 200000;
       const orient = ORIENT_OPTS.includes(params.orient) ? params.orient : 'auto';
-      const key = `${useScan ? `s${shared.serial}` : 'mono'}|${count}|${orient}`;
-      if (worker && shared.restore === 'done' && key !== shared.cloudKey && key !== pendingKey && !(failed && points)) {
+      const what = useScan ? `file:${shared.serial}:${shared.source.name}` : procedural ? `proc:${procedural}` : 'monolith';
+      const key = `${what}|${count}|${orient}`;
+      if (worker && shared.restore === 'done' && key !== shared.cloudKey && key !== pendingKey && !(failed && points && params.source === 'scan')) {
         pendingKey = key;
-        worker.postMessage({ id: ++reqId, bytes: useScan ? shared.source.bytes : null, count, orient });
+        worker.postMessage({ id: ++reqId, bytes: useScan ? shared.source.bytes : null, procedural, count, orient });
       }
 
       // ── Uniforms ───────────────────────────────────────────────────────

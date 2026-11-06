@@ -25,9 +25,12 @@
 //   4. FRAME   — points above the plane are the "figure"; the cloud is
 //                centred on it and scaled so the figure is ~1 unit tall.
 //                Far-off ground is cropped.
+//   (Procedural sources from scan-procedural.js skip 1–2 and join at 3.)
 //   5. ATTRS   — per-point surface distance from the figure's top (voxel
 //                Dijkstra, so a ripple crawls ALONG the surface, not through
 //                it), a figure mask, and a random seed for the shader.
+
+import { PROCEDURAL } from './scan-procedural.js';
 
 const C0 = 0.28209479177387814;  // SH band-0 constant (3DGS colour encoding)
 
@@ -945,7 +948,7 @@ function rotateCloud(P, Nm, count, R) {
   }
 }
 
-export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto' } = {}) {
+export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto', level = true, center = 'median' } = {}) {
   let { count, positions: P, colors: C, normals: Nm } = sampled;
   rng ||= mulberry32(1);
 
@@ -972,7 +975,7 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto' }
   //    get rotated into "the floor" and lay the model on its side; the
   //    file's own up axis is trusted instead.
   //    In manual mode nothing flips: the plane's normal is kept pointing up.
-  let found = findGroundPlane(P, count, eps, rng);
+  let found = level ? findGroundPlane(P, count, eps, rng) : null;
   if (found && manual && found.normal[1] < 0) found = { ...found, normal: found.normal.map(v => -v), d: -found.d };
   const nearlyFlat = !!found && Math.abs(found.normal[1]) > COS30;
   // The footprint test only matters when the plane would rotate the cloud a
@@ -1017,7 +1020,12 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto' }
   // 3. Centre on the figure (median x/z) and scale it to ~1 unit tall.
   const fx = new Float32Array(nFig), fz = new Float32Array(nFig), fy = new Float32Array(nFig);
   for (let i = 0, j = 0; i < count; i++) if (fig[i]) { fx[j] = P[i * 3]; fy[j] = P[i * 3 + 1]; fz[j] = P[i * 3 + 2]; j++; }
-  const cx = percentile(fx, nFig, 0.5), cz = percentile(fz, nFig, 0.5);
+  // Scans centre on the median (robust to clutter at the edges); built
+  // shapes on their 2–98 % mid-range (a short Lorenz run spends more time
+  // in one wing, which would drag a median sideways).
+  const mid = (a) => (percentile(a, nFig, 0.02) + percentile(a, nFig, 0.98)) / 2;
+  const cx = center === 'mid' ? mid(fx) : percentile(fx, nFig, 0.5);
+  const cz = center === 'mid' ? mid(fz) : percentile(fz, nFig, 0.5);
   const y0 = hasGround ? 0 : percentile(fy, nFig, 0.01);
   const h98 = percentile(fy, nFig, 0.98) - y0;
   const rr = new Float32Array(nFig);
@@ -1100,8 +1108,20 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2, orient = 'auto' }
  *   wrapped because Emscripten modules are thenables (returning one bare from
  *   a promise chain never settles). Only called for KHR_draco_mesh_compression GLBs.
  */
-export async function loadScan(buf, count, { decodeImage, loadDraco, orient = 'auto', seed = 1337 } = {}) {
+export async function loadScan(buf, count, { decodeImage, loadDraco, orient = 'auto', procedural = null, seed = 1337 } = {}) {
   const rng = mulberry32(seed);
+  if (procedural) {
+    // Built from scratch (scan-procedural.js) and already modelled upright:
+    // 'auto' means "as built" — the level step still finds a floor, but
+    // never re-orients the model.
+    const gen = PROCEDURAL[procedural];
+    if (!gen) throw new Error(`unknown procedural source "${procedural}"`);
+    const sampled = gen(count, rng);
+    // Only clouds built with a floor (xeno) look for one; the rest float.
+    const cloud = buildCloud(sampled, { rng, orient: orient === 'auto' ? 'as-is' : orient, level: !!sampled.floor, center: 'mid' });
+    cloud.stats.source = { kind: 'procedural', name: procedural };
+    return cloud;
+  }
   let src;
   if (!buf) src = monolithMesh();
   else {

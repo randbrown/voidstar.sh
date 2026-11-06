@@ -7,13 +7,15 @@
 // ~1 unit tall, samples texture colour, and orders the surface distance from
 // the top of the figure down. Also covers PLY point clouds, Gaussian-splat
 // PLYs (SH colour + opacity filter), SPZ, the far "sky shell" cut, splat
-// expansion with thin-axis normals, and the procedural monolith.
+// expansion with thin-axis normals, the procedural monolith and the
+// from-scratch procedural clouds (scan-procedural.js).
 // With a path argument it also runs a real scan and prints its stats.
 
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { loadScan, parseGlb, parsePly, parseSpz, detectFormat, glbUsesDraco } from '../src/lib/qualia/scan-cloud.js';
+import { PROCEDURAL_NAMES } from '../src/lib/qualia/scan-procedural.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -363,6 +365,25 @@ console.log('scan: splat shape + SPZ');
   for (let i = 0; i < c.count; i++) if (!c.fig[i]) { ng++; if (Math.abs(c.normals[i * 3 + 1]) > 0.9) up++; }
   check('ground splat normals = thin axis (up)', ng > 0 && up / ng > 0.9, `${up}/${ng}`);
   check('post stands as the figure', c.stats.groundFound && c.stats.figurePoints > 0);
+}
+
+// ── Procedural clouds ──────────────────────────────────────────────────────
+console.log('scan: procedural clouds');
+{
+  for (const name of PROCEDURAL_NAMES) {
+    const c = await loadScan(null, 20000, { procedural: name });
+    let finite = true, ymax = 0;
+    for (let i = 0; i < c.count * 3; i++) if (!Number.isFinite(c.positions[i])) { finite = false; break; }
+    for (let i = 0; i < c.count; i++) ymax = Math.max(ymax, c.positions[i * 3 + 1]);
+    check(`${name}: full count, finite, framed`, c.count > 19000 && finite && ymax > 0.5 && ymax < 1.6, `count=${c.count} finite=${finite} ymax=${ymax.toFixed(2)}`);
+  }
+  const x = await loadScan(null, 20000, { procedural: 'xeno' });
+  check('xeno stands on its floor', x.stats.groundFound && x.stats.figHeight > 0.9, JSON.stringify(x.stats));
+  const a1 = await loadScan(null, 5000, { procedural: 'atom' }), a2 = await loadScan(null, 5000, { procedural: 'atom' });
+  check('procedural clouds are deterministic', a1.positions.every((v, i) => v === a2.positions[i]));
+  let threw = '';
+  try { await loadScan(null, 100, { procedural: 'nope' }); } catch (e) { threw = e.message; }
+  check('unknown procedural name fails clearly', /unknown procedural/.test(threw), threw);
 }
 
 // ── Monolith fallback ──────────────────────────────────────────────────────
