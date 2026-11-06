@@ -44,7 +44,7 @@ import {
 } from 'three';
 import { applyAudioUniforms, disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
-import { loadLastScan, saveLastScan } from '../scan-store.js';
+import { loadLastScan, saveLastScan, clearLastScan } from '../scan-store.js';
 import { PROCEDURAL_NAMES } from '../scan-procedural.js';
 
 const COUNT_OPTS = ['50000', '100000', '200000', '400000'];
@@ -66,6 +66,7 @@ const shared = {
   source: null,       // { name, bytes } — null → the default cloud
   serial: 0,          // bumps on every new source
   lastFile: null,     // the File object last read from the param
+  sourceFile: null,   // File shown in the panel's file row (rebuilt on restore)
   failedSerial: -1,   // source serial that failed to load (not retried)
   restore: 'idle',    // 'idle' | 'pending' | 'done'
   cloud: null,
@@ -364,10 +365,19 @@ export default {
     }
 
     if (shared.cloud) setCloud(shared.cloud);
+    // The file row comes back empty after a reload or a quale switch; until
+    // update() has handed it the loaded file again, an empty row doesn't
+    // mean "cleared".
+    let panelSynced = false;
     if (shared.restore === 'idle') {
       shared.restore = 'pending';
       loadLastScan().then((rec) => {
-        if (rec && !shared.source) { shared.source = rec; shared.serial++; }
+        if (rec && !shared.source) {
+          shared.source = rec;
+          // A File the panel can show — the picker itself can't be refilled.
+          shared.sourceFile = new File([rec.bytes], rec.name);
+          shared.serial++;
+        }
         shared.restore = 'done';
       });
     }
@@ -425,10 +435,26 @@ export default {
       audioRef = audio;
 
       // ── Source selection (file param → IndexedDB → calabi-yau) ─────────
+      if (!panelSynced) {
+        if (shared.restore === 'done') {
+          if (!shared.sourceFile || params.scan === shared.sourceFile) panelSynced = true;
+          else {
+            shared.lastFile = shared.sourceFile;
+            try { globalThis.qualia?.setParam?.('scan', 'scan', shared.sourceFile); } catch { /* panel not up */ }
+          }
+        }
+      } else if (!params.scan && shared.sourceFile) {
+        // × in the file row: forget the file (and its saved copy) → the
+        // default cloud.
+        shared.source = null; shared.sourceFile = null; shared.lastFile = null;
+        shared.serial++;
+        clearLastScan();
+      }
       const f = params.scan;
       if (f && f !== shared.lastFile) {
         shared.lastFile = f;
         f.arrayBuffer().then((bytes) => {
+          shared.sourceFile = f;
           shared.source = { name: f.name, bytes };
           shared.serial++;
           saveLastScan(f.name, bytes);

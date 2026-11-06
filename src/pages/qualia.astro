@@ -918,7 +918,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .qp-row-file .qp-val {
       min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left;
     }
-    .qp-row-file .qp-file { max-width: 11rem; }
+    .qp-file-wrap { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+    .qp-file-btn {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.68rem;
+      line-height: 1.2; padding: 0.12rem 0.45rem; cursor: pointer; transition: all 0.15s;
+    }
+    .qp-file-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .qp-file-clear { color: var(--text-dim); }
+    .qp-file-clear:hover { border-color: var(--pink); color: var(--pink); }
+    .qp-file-clear[hidden] { display: none; }
     .qp-row input[type=text] {
       width: 160px; background: none; border: 1px solid var(--border);
       border-radius: 4px; color: var(--text); font-family: var(--font-mono);

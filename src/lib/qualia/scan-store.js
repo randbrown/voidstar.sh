@@ -41,6 +41,14 @@ export async function loadLastScan() {
   } catch { return null; }
 }
 
+/** Forget the saved scan (the performer cleared the file). */
+export async function clearLastScan() {
+  try {
+    const db = await openDb();
+    db.transaction(STORE, 'readwrite').objectStore(STORE).delete(LAST);
+  } catch { /* nothing saved / storage unavailable */ }
+}
+
 /** Fire-and-forget; failures (quota, private mode) only cost persistence. */
 export async function saveLastScan(name, bytes) {
   if (!bytes || bytes.byteLength > MAX_BYTES) return;
