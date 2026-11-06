@@ -15,6 +15,10 @@
 //               vias, CPU with a finned heatsink, ICs, capacitors, LEDs
 //   lorenz      the Lorenz strange attractor (σ=10, ρ=28, β=8/3)
 //   calabi-yau  Hanson's quintic Calabi–Yau cross-section (n = 5)
+//   black-hole  horizon shadow, Doppler-beamed accretion disk, lensed far-side
+//               ring, photon ring and polar jets
+//   dna         right-handed B-DNA: two backbones, phosphate beads, A–T / G–C
+//               base-pair rungs
 //
 // Solid objects get lighting baked into their colours (the quale's points
 // are unlit), so form reads from any orbit angle. All generators are
@@ -558,7 +562,107 @@ function calabiYau(count, rng) {
   return { count, positions, colors, normals: null };
 }
 
+// ── black hole ─────────────────────────────────────────────────────────────
+// A Gargantua-style black hole in units of the horizon radius: a near-black
+// horizon sphere (it occludes in the solid 'scan' palette — the shadow), a
+// hot accretion disk with Doppler beaming and spiral turbulence, the lensed
+// image of the disk's far side as a ring arching over the poles, a thin
+// photon ring, and two relativistic jets.
+function blackHole(count, rng) {
+  const positions = new Float32Array(count * 3), colors = new Float32Array(count * 3), normals = new Float32Array(count * 3);
+  let o = 0;
+  const emit = (p, n, c) => { positions.set(p, o * 3); normals.set(n, o * 3); colors.set(c, o * 3); o++; };
+  // Disk temperature: white-hot inside → amber → deep red at the rim.
+  const heat = (t) => t < 0.35 ? mix([1.0, 0.97, 0.9], [1.0, 0.72, 0.3], t / 0.35) : mix([1.0, 0.72, 0.3], [0.55, 0.12, 0.08], (t - 0.35) / 0.65);
+  const R_IN = 2.6, R_OUT = 7.5;
+  const parts = [
+    ['horizon', 0.14], ['disk', 0.56], ['lensed', 0.1], ['photon', 0.04], ['jets', 0.16],
+  ];
+  for (const [kind, share] of parts) {
+    const k = kind === 'jets' ? count - o : Math.floor(count * share);
+    for (let i = 0; i < k; i++) {
+      if (kind === 'horizon') {
+        // Event horizon: almost black, with a faint violet limb so its edge reads.
+        const d = randomDir(rng);
+        emit(d, d, [0.012, 0.01, 0.02]);
+      } else if (kind === 'disk') {
+        // Radius ∝ inner-weighted (brighter, denser near the ISCO).
+        const r = R_IN + (R_OUT - R_IN) * Math.pow(rng(), 1.6);
+        const a = rng() * Math.PI * 2;
+        const t = (r - R_IN) / (R_OUT - R_IN);
+        const h = gaussian(rng) * 0.04 * (0.4 + t * 1.6);           // flares a little outward
+        // Spiral turbulence streaks + Doppler beaming (approaching side, sin a > 0).
+        const streak = 0.65 + 0.35 * Math.sin(a * 3 + Math.log(r) * 9 + rng() * 0.6);
+        const doppler = 0.55 + 0.75 * (0.5 + 0.5 * Math.sin(a));
+        const c = mul(heat(t), streak * doppler * (1.15 - 0.45 * t));
+        const blue = Math.max(0, Math.sin(a)) * 0.18;               // blueshift on the approaching side
+        emit([Math.cos(a) * r, h, Math.sin(a) * r], [0, Math.sign(h) || 1, 0], [clamp01(c[0] - blue * 0.5), clamp01(c[1]), clamp01(c[2] + blue)]);
+      } else if (kind === 'lensed') {
+        // The disk's far side, bent over the top and under the bottom of the
+        // shadow — a ring in the vertical plane, hugging the horizon.
+        const a = rng() * Math.PI * 2;
+        const r = 1.35 + rng() * 1.3;
+        const t = (r - 1.35) / 1.3;
+        const z = gaussian(rng) * 0.03;
+        emit([Math.cos(a) * r, Math.sin(a) * r, z], [Math.cos(a), Math.sin(a), 0], mul(heat(0.25 + t * 0.7), 0.6 - 0.35 * t));
+      } else if (kind === 'photon') {
+        // Photon ring: a razor-thin bright circle just outside the shadow.
+        const a = rng() * Math.PI * 2, r = 1.12 + gaussian(rng) * 0.01;
+        emit([Math.cos(a) * r, Math.sin(a) * r, gaussian(rng) * 0.01], [Math.cos(a), Math.sin(a), 0], [1.0, 0.95, 0.85]);
+      } else {
+        // Jets: narrow, slightly widening cones up and down the spin axis.
+        const up = rng() < 0.5 ? 1 : -1;
+        // Kept shorter than the disk is wide, so the disk sets the framing.
+        const y = 1.2 + Math.pow(rng(), 0.8) * 4.3;
+        const w = 0.04 + y * 0.022, a = rng() * Math.PI * 2, rr = Math.abs(gaussian(rng)) * w * 0.6;
+        const fade = 1 - (y - 1.2) / 4.3;
+        emit([Math.cos(a) * rr, up * y, Math.sin(a) * rr], [Math.cos(a), 0, Math.sin(a)], mul([0.45, 0.65, 1.0], 0.25 + 0.75 * fade));
+      }
+    }
+  }
+  return { count: o, positions, colors, normals };
+}
+
+// ── DNA ────────────────────────────────────────────────────────────────────
+// B-DNA, right-handed: 10.5 base pairs per turn, two sugar-phosphate
+// backbones offset to give the major/minor grooves, phosphate beads, and
+// base-pair rungs coloured by base (A–T, G–C).
+function dna(count, rng) {
+  const B = makeBuilder(rng);
+  // ~2.3 turns: true B-DNA proportions, short enough to read as a helix.
+  const R = 0.32, RISE = 0.0338 * 3, BP_PER_TURN = 10.5, PAIRS = 24;
+  const H = PAIRS * RISE;
+  const twist = (2 * Math.PI) / BP_PER_TURN;
+  const GROOVE = (2 * Math.PI) * (150 / 360);                       // minor-groove offset between strands
+  const strand = (y, s) => {
+    const a = (y / RISE) * twist + s * GROOVE;
+    return [Math.cos(a) * R, y, Math.sin(a) * R];
+  };
+  const BASES = { A: [0.25, 0.95, 0.55], T: [1.0, 0.35, 0.45], G: [0.35, 0.65, 1.0], C: [1.0, 0.82, 0.3] };
+  const PAIR = { A: 'T', T: 'A', G: 'C', C: 'G' };
+  // Backbones: two smooth tubes, sampled densely along the helix.
+  for (const s of [0, 1]) {
+    const pts = [];
+    for (let i = 0; i <= PAIRS * 4; i++) pts.push(strand((i / (PAIRS * 4)) * H, s));
+    tube(B, pts, () => 0.045, (t, n) => lit(s ? [0.62, 0.4, 1.0] : [0.3, 0.75, 1.0], n, { gloss: 0.8, ambient: 0.45 }), { weight: 1.3 });
+  }
+  for (let i = 0; i < PAIRS; i++) {
+    const y = (i + 0.5) * RISE;
+    const p0 = strand(y, 0), p1 = strand(y, 1);
+    // Phosphate beads on each backbone.
+    for (const [p, s] of [[p0, 0], [p1, 1]]) {
+      ellipsoid(B, p, [0.065, 0.065, 0.065], (n) => lit(s ? [0.8, 0.6, 1.0] : [0.55, 0.9, 1.0], n, { gloss: 1, ambient: 0.5 }), { weight: 1.2 });
+    }
+    // Base pair: two half-rungs meeting near the axis, a little gap between.
+    const b = 'ATGC'[Math.floor(rng() * 4)], pb = PAIR[b];
+    const mid = mix(p0, p1, 0.5);
+    tube(B, [mix(p0, mid, 0.15), mix(p0, mid, 0.55), mix(p0, mid, 0.95)], () => 0.022, (t, n) => lit(BASES[b], n, { gloss: 0.6, ambient: 0.5 }));
+    tube(B, [mix(p1, mid, 0.15), mix(p1, mid, 0.55), mix(p1, mid, 0.95)], () => 0.022, (t, n) => lit(BASES[pb], n, { gloss: 0.6, ambient: 0.5 }));
+  }
+  return B.build(count);
+}
+
 export const PROCEDURAL = {
-  xeno, atom, neuron, circuit, lorenz, 'calabi-yau': calabiYau,
+  'calabi-yau': calabiYau, xeno, atom, neuron, circuit, lorenz, 'black-hole': blackHole, dna,
 };
 export const PROCEDURAL_NAMES = Object.keys(PROCEDURAL);

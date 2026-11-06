@@ -29,13 +29,14 @@
 //   pose head.x → orbit offset, pose headPitch → camera elevation (smoothed).
 //
 // Built-in sources (no file): `source` = monolith or one of the procedural
-// clouds in scan-procedural.js — xeno, atom, neuron, circuit, lorenz,
-// calabi-yau. Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is kept in
-// IndexedDB (scan-store.js) and restored on reload; with nothing loaded (or
-// `source: monolith`) a procedural monolith runs through the same pipeline.
+// clouds in scan-procedural.js — calabi-yau, xeno, atom, neuron, circuit,
+// lorenz, black-hole, dna.
+// Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is
+// kept in IndexedDB (scan-store.js) and restored on reload; with nothing
+// loaded (e.g. first run) `source: scan` shows the calabi-yau cloud.
 // GLB: plain or Draco-compressed (decoder lazy-loaded in the worker; meshopt
 // is not supported); per-part material colours, first base-colour texture.
-// A file that fails to load keeps the current cloud (or shows the monolith).
+// A file that fails to load keeps the current cloud (or shows calabi-yau).
 
 import {
   Scene, PerspectiveCamera, Points, BufferGeometry, BufferAttribute,
@@ -56,11 +57,13 @@ const SPEC_N     = 32;
 const RINGS      = 4;
 const RING_IDLE  = 99;        // age that marks a ring slot as unused
 const RING_KEYS  = ['x', 'y', 'z', 'w'];
+// Shown when `source` is 'scan' but no file has been loaded (or it failed).
+const DEFAULT_CLOUD = 'calabi-yau';
 
 // Survives quale switches: the source bytes and the last processed cloud, so
 // coming back to Scan doesn't re-read IndexedDB or re-run the worker.
 const shared = {
-  source: null,       // { name, bytes } — null → monolith
+  source: null,       // { name, bytes } — null → the default cloud
   serial: 0,          // bumps on every new source
   lastFile: null,     // the File object last read from the param
   failedSerial: -1,   // source serial that failed to load (not retried)
@@ -343,7 +346,7 @@ export default {
         if (error) {
           console.warn('[qualia] scan: could not load', key.split('|')[0], '—', error);
           // Don't retry the same bad file every frame. update() keeps the
-          // cloud already on stage, or falls back to the monolith if none.
+          // cloud already on stage, or falls back to the default cloud if none.
           if (key.startsWith('file:')) shared.failedSerial = shared.serial;
           shared.cloudKey = key;
           return;
@@ -419,7 +422,7 @@ export default {
       const audio = scaleAudio(field.audio, params.reactivity);
       audioRef = audio;
 
-      // ── Source selection (file param → IndexedDB → monolith) ───────────
+      // ── Source selection (file param → IndexedDB → calabi-yau) ─────────
       const f = params.scan;
       if (f && f !== shared.lastFile) {
         shared.lastFile = f;
@@ -432,8 +435,10 @@ export default {
         }).catch((e) => console.warn('[qualia] scan: could not read file', e));
       }
       const failed = shared.failedSerial === shared.serial;
-      const procedural = PROCEDURAL_NAMES.includes(params.source) ? params.source : null;
       const useScan = params.source === 'scan' && !!shared.source && !failed;
+      // 'scan' with no (working) file shows the default built-in cloud.
+      const procedural = PROCEDURAL_NAMES.includes(params.source) ? params.source
+        : params.source === 'scan' && !useScan ? DEFAULT_CLOUD : null;
       const count = parseInt(params.points, 10) || 200000;
       const orient = ORIENT_OPTS.includes(params.orient) ? params.orient : 'auto';
       const what = useScan ? `file:${shared.serial}:${shared.source.name}` : procedural ? `proc:${procedural}` : 'monolith';
