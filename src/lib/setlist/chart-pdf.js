@@ -6,7 +6,7 @@
 // top-to-bottom. Drive's thumbnail renderer (what the worker used to serve)
 // only ever drew page 1.
 
-import { getPdfjs } from '../mind/pdf.js';
+import { openPdf } from '../mind/pdf.js';
 
 const MAX_PAGES = 12;
 const TARGET_WIDTH = 1600;
@@ -24,8 +24,7 @@ export function isPdfBlob(blob) {
 // stack's and first page's width/height let callers migrate annotations
 // drawn against a page-1-only render.
 export async function rasterizePdfStack(pdfBlob) {
-  const pdfjs = await getPdfjs();
-  const doc = await pdfjs.getDocument({ data: await pdfBlob.arrayBuffer() }).promise;
+  const doc = await openPdf(pdfBlob);
   try {
     const totalPages = doc.numPages;
     const count = Math.min(totalPages, MAX_PAGES);

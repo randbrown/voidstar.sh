@@ -1,7 +1,7 @@
 // All view renderers for the setlist lab.
 
 import * as store from './store.js';
-import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
+import { navigate, refresh, getLastSongId, setLastSongId, getPrevHash } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
@@ -18,7 +18,7 @@ import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics, isLocalDirty } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, refreshStaleChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, refreshStaleChart, fetchChartText, revalidateTextChart, CHART_CACHED_EVENT, FULL_RENDER } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
@@ -2528,8 +2528,8 @@ function mountRemoteChartInto(stage, song, chart = null) {
 // the uncached live render is Drive's page-1 thumbnail, so a multi-page PDF
 // would show (and be annotated as) its first page only. Null when it can't
 // be cached (offline, no worker, fetch failed): callers fall back to live.
-// A `stale` cached entry (a page-1-only Drive render from before
-// whole-document caching) is refreshed here BEFORE rendering — not in the
+// A `stale` cached entry (a Drive render from an older renderer: a page-1
+// thumbnail, or a possibly-blank PDF raster) is refreshed here BEFORE rendering — not in the
 // background — so the annotation editor never holds strokes that the
 // refresh's page-1 → page-stack migration rewrites underneath it.
 async function getOrCacheOfflineChart(song, chart) {
@@ -5495,9 +5495,39 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 const SCRATCH_PAGE_ASPECT = 8.5 / 11;
 
 export async function renderAnnotation(root, songId, setlistId, { draw = false, scratch = false, altId = null } = {}) {
+  const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
+  // ── History bookkeeping (read synchronously, before any await) ──
+  // Leaving the editor must WALK BACK through history, never push: the old
+  // navigate(backHash) exits left [song, editor, guard, song] on the stack,
+  // so the system back gesture from the song page re-opened the editor,
+  // whose own back pushed the song page again — an endless song⇄editor
+  // loop with no way back to the setlist short of killing the app. The
+  // editor's entry is stamped with the hash it was opened from
+  // (slAnnPrev), so a later visit to the same entry (back/forward, or a
+  // refresh() re-render) still knows what sits behind it.
+  const entryState = history.state || {};
+  let guardArmed = !!entryState.slAnnGuard; // re-rendered while the guard entry is current
+  const prevHash = 'slAnnPrev' in entryState ? entryState.slAnnPrev : getPrevHash();
+  if (!('slAnnPrev' in entryState)) {
+    history.replaceState({ ...entryState, slAnnPrev: prevHash }, '', location.href);
+  }
+  const prevIsBack = prevHash === backHash;
+  let leaving = false;
+  let ignoreNextPop = false;
+  function armGuard() {
+    history.pushState({ slAnnGuard: true, slAnnPrev: prevHash }, '', location.href);
+    guardArmed = true;
+  }
+  // Every exit (back arrow, done, make-doc link) goes through here.
+  function leaveEditor() {
+    if (leaving) return;
+    leaving = true;
+    if (prevIsBack) history.go(guardArmed ? -2 : -1);
+    else location.replace(backHash); // deep link / opened from elsewhere: no push either
+  }
+
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
-  const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
   // Annotating an ALTERNATE chart: same editor, but the chart URL and the
   // annotation layer come from the alternate (layer keyed
   // store.altChartKey). A stale alt link (removed on another device) bails
@@ -5519,7 +5549,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
   const container = el('div', 'sl-annotation-container');
   const toolbar = el('div', 'sl-annotation-toolbar');
 
-  const backBtn = btn('&larr;', 'sl-btn-icon', () => navigate(backHash));
+  const backBtn = btn('&larr;', 'sl-btn-icon', () => leaveEditor());
   toolbar.appendChild(backBtn);
   toolbar.appendChild(el('span', 'sl-ann-sep'));
 
@@ -5730,14 +5760,31 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
   const myHash = location.hash;
   function onPopState() {
     // Hash changed = a real navigation — route() owns it (teardown below
-    // still rescues dirty ink). Same hash = our guard entry was popped.
+    // still rescues dirty ink). Same hash = our guard entry was popped
+    // (or, rarely, a forward step back onto it).
     if (location.hash !== myHash) return;
+    if (history.state?.slAnnGuard) { guardArmed = true; return; }
+    guardArmed = false;
+    if (leaving) return;
+    if (ignoreNextPop) { ignoreNextPop = false; return; }
+    // Back with the text sheet open dismisses the sheet, not the editor —
+    // and must never leave its full-screen backdrop behind.
+    const sheet = document.querySelector('.sl-ann-textsheet-backdrop');
+    if (sheet) {
+      sheet.dispatchEvent(new Event('sl-dismiss'));
+      armGuard();
+      return;
+    }
     if (canvasCtrl?.isDirty()) {
       canvasCtrl.save();
-      history.pushState(null, '', location.href);
+      armGuard();
       showToast('ink saved — swipe back again to leave');
+    } else if (prevHash) {
+      // A real back: step off the editor's own entry to whatever opened it.
+      leaving = true;
+      history.back();
     } else {
-      navigate(backHash);
+      leaveEditor(); // opened cold (fresh load / deep link): nothing behind it
     }
   }
   function onBeforeUnload(e) {
@@ -5777,7 +5824,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     // input (see uiBusyEditing).
     canvas.dataset.drawing = '1';
     // Arm the back-gesture guard (see onPopState above).
-    history.pushState(null, '', location.href);
+    if (!guardArmed) armGuard();
     showAnnotateScrollHint();
   }
 
@@ -5828,11 +5875,11 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
         await store.putSong(song);
         // The PNG bytes are already in hand — prime the offline cache
         // directly instead of a worker round-trip.
-        await store.putChartBlob(songId, blob, webViewLink, { full: true });
+        await store.putChartBlob(songId, blob, webViewLink, { full: FULL_RENDER });
         await store.deleteAnnotation(songId);
         if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
         showLinkToast('chart linked to this song', webViewLink);
-        navigate(backHash);
+        leaveEditor();
         return;
       }
       showLinkToast('chart exported to Drive', webViewLink);
@@ -5854,8 +5901,16 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     // the inline chart shows the result.
     if (draw) {
       await new Promise(r => setTimeout(r, 100));
-      navigate(backHash);
+      leaveEditor();
       return;
+    }
+
+    // Staying on this page in view mode: drop the now-pointless guard entry
+    // so the next back leaves instead of being swallowed.
+    if (guardArmed) {
+      ignoreNextPop = true;
+      guardArmed = false;
+      history.back();
     }
 
     viewControls.style.display = 'flex';

@@ -1385,6 +1385,10 @@ JetBrains Mono, so their footprint doesn't change.
   the wait); on empty space it scrolls. Touches are ignored while the pen is
   down (palm rejection). The pen landing off a finger-grabbed selection ends
   that session and draws.
+  The pen-down flag can't latch: pen lifts are caught document-wide, a
+  pen hover move (`buttons === 0`) clears it, and it goes stale after 3 s
+  without pen activity. A missed pen-up used to drop every finger touch
+  (no scroll, no select) until the editor was rebuilt.
 - **Pinch to resize:** with the select session's first finger on the
   selected element, a second finger scales it. Text scales its font size;
   ink scales its geometry about the bbox center. Anywhere else, two fingers
@@ -1422,8 +1426,21 @@ perform mode always renders the primary):
    into one tall PNG, so every render path still gets a single flat image
    and annotations normalize against the whole document. A raw PDF blob
    already in the cache (a direct `.pdf` link) is rasterized on read.
-   Entries written this way carry `full: true`. A Drive-file image entry
-   without it is the old page-1 thumbnail: `getOfflineChart` flags it
+   **Scanned PDFs need pdf.js's wasm decoders.** A scan's page is one big
+   JBIG2 / CCITT-fax / JPEG 2000 image, and pdf.js 5 decodes those with wasm
+   modules it fetches at runtime by filename. Without them the image is
+   skipped with only a console warning (`OpenJPEG failed to initialize`)
+   and the page rasterizes **blank white** — which dark mode shows as a solid
+   black chart under the ink. Every `getDocument` therefore goes through
+   `openPdf` (`src/lib/mind/pdf.js`), which hands pdf.js a
+   `BinaryDataFactory` mapping those filenames (plus the standard-font data)
+   to their bundled, hashed asset URLs. Don't call `pdfjs.getDocument`
+   directly.
+
+   Entries written this way carry `full: FULL_RENDER` (`chart-cache.js`).
+   `isStaleChartRecord` flags older Drive-file entries: no `full` is the old
+   page-1 thumbnail, and a PNG with `full: true` may be a blank raster from
+   before the decoders were wired in. `getOfflineChart` flags it
    `stale`, the song page, annotation editor and perform mode re-fetch it
    before rendering when online (`getOrCacheOfflineChart` →
    `refreshStaleChart`, not in the background, so no view holds strokes the
@@ -1573,6 +1590,19 @@ not classes). Constraints to preserve:
   unsaved it's honored as a real exit. Any other teardown (hashchange
   while drawing) auto-saves dirty ink on the way out, and `beforeunload`
   warns + best-effort-saves on reload/close.
+- **Leaving the editor walks history back; it never pushes.** Each editor
+  entry is stamped (`history.state.slAnnPrev`, via `getPrevHash()` from the
+  router's `hashchange.oldURL`) with the hash it was opened from. Done, the
+  ← arrow and make-doc go `history.go(-2|-1)` when that hash is the song
+  page (else `location.replace(backHash)`), and a back gesture off a clean
+  editor is a real `history.back()`. The old `navigate(backHash)` exits left
+  `[song, editor, guard, song]` on the stack, so back from the song page
+  reopened the editor, whose back pushed the song page again: an endless
+  song⇄editor loop with no way back to the setlist short of killing the app.
+- **The text sheet can't outlive its route.** Its backdrop sits on `<body>`
+  (full-screen, z-index 1000), so it closes itself on `hashchange`, and a
+  back gesture while it's open dismisses only the sheet (the guard
+  re-arms). A stranded backdrop used to swallow every tap and scroll.
 - **Pen color is remembered.** The color picker defaults to the last-used
   ink (`voidstar.setlist.annColor`; scratch mode has its own
   `…annColorScratch` memory, falling back to near-black — on paper, dark

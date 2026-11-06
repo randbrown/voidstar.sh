@@ -35,7 +35,7 @@ import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
-import { makeSoftLimiter, setSoftLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
+import { makeLimiter, makeRigLimiter, setLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
 import { autoCorrelate } from './pitch.js';
 import { planLock, lockErrorSec, retroOutCycle, countAudibleBlocks } from './looper-lock.js';
 import { registerContext, resumeContext } from './audio-unlock.js';
@@ -553,10 +553,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // speakers — clip insurance so the rig can't push full-scale into the
     // device-level sum. The rig strip's own compressor shapes tone upstream;
     // this only catches true overs. Bypassable from the mixer. This is the
-    // ZERO-LATENCY soft-clip variant, not the shared DynamicsCompressor
-    // limiter: the live instrument monitor runs through here, and the
-    // compressor version costs ~6 ms of lookahead pre-delay even when idle.
-    rigLimiter = makeSoftLimiter(ctx, _rigLimiterOn);
+    // lookahead worklet limiter with a SHORT (1.5 ms) lookahead — the live
+    // instrument monitor runs through here — and a zero-latency soft-clip
+    // fallback until the worklet module lands. Gain-riding, not clipping, so
+    // a boosted rig gets louder without the old soft-clip saturation.
+    rigLimiter = makeRigLimiter(ctx, _rigLimiterOn);
     rigLimiter.__qualiaBypassMute = true;
     rigMaster.connect(rigLimiter);
     rigLimiter.connect(ctx.destination);
@@ -606,10 +607,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // pads sum through ONE bus whose gain is `level / sqrt(N)` — incoherent
   // layers add ~sqrt(N) in RMS, so this keeps total loudness roughly constant
   // as you stack (fewer layers ⇒ each louder, more ⇒ each quieter). A
-  // zero-latency soft-clip limiter on the bus catches coherent overshoot so a
-  // stack can never clip the rig sum. Graph:
+  // lookahead limiter on the bus catches coherent overshoot so a stack can
+  // never clip the rig sum (pads aren't latency-critical, so it gets the bus
+  // lookahead). Graph:
   //   pad.source → pad.gain (per-pad fade) → freezeBus (level/√N) →
-  //   freezeLimiter (soft clip) → rigMaster
+  //   freezeLimiter (lookahead) → rigMaster
   let _freezeStack = [];           // [{ source, gain }] — index 0 oldest, last = top
   let _freezeBus = null, _freezeLimiter = null;
   let _freezePaused = false;       // pause gate — holds the whole bus silent (see setFreezePaused)
@@ -620,7 +622,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     _freezeBus = ctx.createGain();
     _freezeBus.gain.value = 0;
     _freezeBus.__qualiaBypassMute = true;
-    _freezeLimiter = makeSoftLimiter(ctx, true);   // always engaged on the freeze bus
+    _freezeLimiter = makeLimiter(ctx, true);   // always engaged on the freeze bus
     _freezeLimiter.__qualiaBypassMute = true;
     _freezeBus.connect(_freezeLimiter);
     _freezeLimiter.connect(rigMaster);
@@ -766,13 +768,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
   function isRigPaused() { return _rigPaused; }
   function primeRig(level, muted) { _rigLevel = clampRig(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function setRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function setRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigLimiter() { return _rigLimiterOn; }
-  function primeRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function primeRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigMaster() { return { level: _rigLevel, muted: _rigMuted, limiter: _rigLimiterOn }; }
 
-  // Limiter gain-reduction readout (mixer GR meter). The soft clipper is
-  // memoryless, so GR is a pure function of the pre-limiter peak — and
+  // Limiter gain-reduction readout (mixer GR meter). The lookahead worklet
+  // reports its own GR. Until it's up, the soft-clip fallback is memoryless,
+  // so GR is a pure function of the pre-limiter peak — and
   // outputAnalyser already taps exactly that point (rigMaster: post-fader,
   // PRE-limiter). Float time-domain data is unclamped, so boosted peaks
   // above 0 dBFS read true. Reused buffer; polled per frame by the mixer
@@ -780,6 +783,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let _grBuf = null;
   function getRigReductionDb() {
     if (!_rigLimiterOn || _rigMuted || !outputAnalyser) return 0;
+    const reported = rigLimiter?.getReductionDb?.();
+    if (reported != null) return reported;
     if (!_grBuf || _grBuf.length !== outputAnalyser.fftSize) _grBuf = new Float32Array(outputAnalyser.fftSize);
     outputAnalyser.getFloatTimeDomainData(_grBuf);
     let p = 0;
@@ -798,7 +803,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return {
       baseSec:   ctx.baseLatency || 0,
       outputSec: ctx.outputLatency || 0,
-      graphSec:  strip ? strip.getLatencySeconds() : 0,
+      graphSec:  (strip ? strip.getLatencySeconds() : 0) + (rigLimiter?.getLatencySeconds?.() || 0),
       sampleRate: ctx.sampleRate,
       inputSampleRate: _inputSampleRate,
       resampled: !!(_inputSampleRate && Math.abs(_inputSampleRate - ctx.sampleRate) > 1),
@@ -1636,7 +1641,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     for (const f of _freezeStack) { try { f.source.stop(); } catch {} try { f.source.disconnect(); f.gain.disconnect(); } catch {} }
     _freezeStack = [];
     try { _freezeBus?.disconnect(); } catch {}
-    try { _freezeLimiter?.disconnect(); } catch {}
+    try { _freezeLimiter?.dispose(); } catch {}
     _freezeBus = _freezeLimiter = null;
     for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
     _pendingGrabs.clear();
@@ -1647,7 +1652,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { loopMaster?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
     try { outputAnalyser?.disconnect(); } catch {}
-    try { rigLimiter?.disconnect(); } catch {}
+    try { rigLimiter?.dispose(); } catch {}
     try { rigMaster?.disconnect(); } catch {}
     rigMaster = outputAnalyser = rigLimiter = null;
     loopMaster = analyser = null;

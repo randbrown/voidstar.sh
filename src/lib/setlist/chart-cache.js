@@ -180,18 +180,32 @@ export async function revalidateTextChart(cacheKey, chartUrl, cachedText) {
   return text;
 }
 
+// `full` on a cache entry says how it was rendered. Absent: a Drive file's
+// page-1 thumbnail from before whole-document caching. `true`: whole-document
+// rendering, but before pdf.js had its image decoders wired in — a scanned
+// PDF (JBIG2 / CCITT / JPEG 2000 page images) rasterized as a blank white
+// page, which dark mode shows as solid black. FULL_RENDER: current. Drive
+// entries older than that get re-fetched once (see isStaleChartRecord).
+export const FULL_RENDER = 2;
+
+// Only a PNG can be one of those blank PDF rasters, so a JPEG/text entry
+// from the `true` era is still good.
+function isStaleChartRecord(rec, url) {
+  if (!isDriveFileChart(url)) return false;
+  if (!rec.full) return true;
+  return rec.full !== FULL_RENDER && rec.blob?.type === 'image/png';
+}
+
 // Store a fetched chart. PDFs are rasterized here — every page, stacked
 // into one tall PNG (chart-pdf.js) — so every render path keeps handling a
-// single flat image. `full` marks entries cached with whole-document
-// rendering; older entries of Drive files were the worker's page-1 thumbnail
-// and get re-fetched once (see getOfflineChart).
+// single flat image.
 async function storeChartBlob(cacheKey, blob, chartUrl) {
   if (isPdfBlob(blob)) {
     const r = await rasterizePdfStack(blob);
     await migratePageOneAnnotation(cacheKey, r);
     blob = r.blob;
   }
-  await store.putChartBlob(cacheKey, blob, chartUrl, { full: true });
+  await store.putChartBlob(cacheKey, blob, chartUrl, { full: FULL_RENDER });
   return blob;
 }
 
@@ -228,13 +242,13 @@ async function cacheSongs(songs, onProgress, { skipCached = false } = {}) {
   const stale = new Set();
   if (skipCached) {
     const cachedIds = new Set(await store.getCachedChartIds());
-    // A stale page-1-only Drive render counts as missing, so auto-cache
-    // upgrades it to the whole document (fresh: the browser may still hold
-    // the worker's old thumbnail response).
+    // A stale Drive render (page-1-only, or a possibly-blank PDF raster)
+    // counts as missing, so auto-cache re-renders it (fresh: the browser may
+    // still hold the worker's old response).
     for (const s of withCharts) {
       if (!cachedIds.has(s.id) || !isDriveFileChart(s.chartUrl)) continue;
       const rec = await store.getChartBlob(s.id);
-      if (rec && !rec.full) { cachedIds.delete(s.id); stale.add(s.id); }
+      if (rec && isStaleChartRecord(rec, rec.sourceUrl || s.chartUrl)) { cachedIds.delete(s.id); stale.add(s.id); }
     }
     const before = withCharts.length;
     withCharts = withCharts.filter(s => !cachedIds.has(s.id));
@@ -288,10 +302,11 @@ export async function getSetlistOfflineStatus(setlist) {
   return { cached, total: chartedIds.length };
 }
 
-// Drive-file charts cached before whole-document rendering hold only the
-// worker's page-1 thumbnail; getOfflineChart flags them `stale`. This
-// re-fetches one (the worker now serves PDFs raw) — real images just get
-// re-downloaded once, after which the entry is marked full either way.
+// Drive-file charts cached by an older renderer (a page-1 thumbnail, or a PDF
+// raster that may be blank — see FULL_RENDER) are flagged `stale` by
+// getOfflineChart. This re-fetches one (the worker now serves PDFs raw) —
+// real images just get re-downloaded once, after which the entry is marked
+// current either way.
 // Concurrent calls for one key share a fetch. Resolves cacheChartByUrl's
 // result, or null when there's nothing to do (offline / no worker).
 const refreshing = new Map();
@@ -315,7 +330,7 @@ function isDriveFileChart(url) {
 // object URL the caller MUST URL.revokeObjectURL() when done, plus the raw
 // blob so callers can run pixel processing like chart-enhance.js) for
 // everything else, or null when not cached. `stale` on an image marks a
-// page-1-only Drive render from before whole-document caching — see
+// Drive render from an older renderer (see FULL_RENDER) — see
 // refreshStaleChart.
 //
 // Pass the song's current chartUrl as `expectedUrl` to guard against a stale
@@ -348,7 +363,7 @@ export async function getOfflineChart(songId, expectedUrl) {
         const blob = await storeChartBlob(songId, rec.blob, rec.sourceUrl || expectedUrl || '');
         return { kind: 'image', url: URL.createObjectURL(blob), blob };
       }
-      const stale = !rec.full && isDriveFileChart(rec.sourceUrl || expectedUrl);
+      const stale = isStaleChartRecord(rec, rec.sourceUrl || expectedUrl);
       return { kind: 'image', url: URL.createObjectURL(rec.blob), blob: rec.blob, stale };
     }
   } catch {}
