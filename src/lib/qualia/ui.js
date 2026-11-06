@@ -113,7 +113,7 @@ export function buildParamPanel({
   for (const spec of params) {
     state[spec.id] = spec.default;
 
-    const row = el('div', { class: 'qp-row' });
+    const row = el('div', { class: spec.type === 'file' ? 'qp-row qp-row-file' : 'qp-row' });
     // Build a small "reactive" indicator dot for any param that declares
     // modulators. Inlined in JS rather than via CSS::before because the
     // Astro CSS scoping in this page doesn't reach JS-created elements
@@ -215,6 +215,7 @@ export function buildParamPanel({
         const f = control.files && control.files[0] ? control.files[0] : null;
         state[spec.id] = f;
         valSpan.textContent = fmt(spec, f);
+        valSpan.title = f ? f.name : '';
         onChange?.(spec.id, f);
         // Reset so the same file can be picked again later (browsers ignore
         // a second change event for an identical selection otherwise).
@@ -320,6 +321,7 @@ export function buildParamPanel({
     } else if (r.spec.type === 'file') {
       // No way to write a value back into a <input type="file"> programmatically
       // — just refresh the label. The underlying File reference is kept in state.
+      r.valSpan.title = v ? v.name : '';
     }
     r.valSpan.textContent = fmt(r.spec, v);
   }

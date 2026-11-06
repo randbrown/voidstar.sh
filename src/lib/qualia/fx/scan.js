@@ -31,7 +31,9 @@
 // Loading: pick a .glb / .ply / .spz in the `scan` param. The last file is kept in
 // IndexedDB (scan-store.js) and restored on reload; with nothing loaded (or
 // `source: monolith`) a procedural monolith runs through the same pipeline.
-// GLB limits: uncompressed only (no Draco/meshopt), first base-colour texture.
+// GLB: plain or Draco-compressed (decoder lazy-loaded in the worker; meshopt
+// is not supported); per-part material colours, first base-colour texture.
+// A file that fails to load keeps the current cloud (or shows the monolith).
 
 import {
   Scene, PerspectiveCamera, Points, BufferGeometry, BufferAttribute,
@@ -55,6 +57,7 @@ const shared = {
   source: null,       // { name, bytes } — null → monolith
   serial: 0,          // bumps on every new source
   lastFile: null,     // the File object last read from the param
+  failedSerial: -1,   // source serial that failed to load (not retried)
   restore: 'idle',    // 'idle' | 'pending' | 'done'
   cloud: null,
   cloudKey: '',
@@ -331,8 +334,11 @@ export default {
         const key = pendingKey;
         pendingKey = '';
         if (error) {
-          console.warn('[qualia] scan: could not load —', error);
-          shared.cloudKey = key;                       // don't retry the same bad file every frame
+          console.warn('[qualia] scan: could not load', shared.source?.name || 'monolith', '—', error);
+          // Don't retry the same bad file every frame. update() keeps the
+          // cloud already on stage, or falls back to the monolith if none.
+          if (key.startsWith('s')) shared.failedSerial = shared.serial;
+          shared.cloudKey = key;
           return;
         }
         shared.cloud = cloud;
@@ -416,10 +422,11 @@ export default {
           saveLastScan(f.name, bytes);
         }).catch((e) => console.warn('[qualia] scan: could not read file', e));
       }
-      const useScan = params.source !== 'monolith' && !!shared.source;
+      const failed = shared.failedSerial === shared.serial;
+      const useScan = params.source !== 'monolith' && !!shared.source && !failed;
       const count = parseInt(params.points, 10) || 200000;
       const key = `${useScan ? `s${shared.serial}` : 'mono'}|${count}`;
-      if (worker && shared.restore === 'done' && key !== shared.cloudKey && key !== pendingKey) {
+      if (worker && shared.restore === 'done' && key !== shared.cloudKey && key !== pendingKey && !(failed && points)) {
         pendingKey = key;
         worker.postMessage({ id: ++reqId, bytes: useScan ? shared.source.bytes : null, count });
       }

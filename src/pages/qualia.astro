@@ -912,6 +912,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        buildParamPanel) — Astro's per-component CSS scoping doesn't reach
        JS-created elements without the `data-astro-cid-…` attribute. */
     .qp-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    /* File params: a long filename must never push the picker off the panel
+       — the label may shrink and the name truncates (full name on hover). */
+    .qp-row-file label { min-width: 0; }
+    .qp-row-file .qp-val {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left;
+    }
+    .qp-row-file .qp-file { max-width: 11rem; }
     .qp-row input[type=text] {
       width: 160px; background: none; border: 1px solid var(--border);
       border-radius: 4px; color: var(--text); font-family: var(--font-mono);

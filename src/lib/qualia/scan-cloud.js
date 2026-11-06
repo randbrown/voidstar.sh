@@ -4,7 +4,7 @@
 // and under node in scripts/check-qualia-scan.mjs.
 //
 // Pipeline (loadScan):
-//   1. PARSE   — GLB (binary glTF 2.0, uncompressed), PLY (ascii / binary;
+//   1. PARSE   — GLB (binary glTF 2.0, plain or Draco-compressed), PLY (ascii / binary;
 //                plain point clouds, coloured meshes, and 3D Gaussian-splat
 //                exports from Scaniverse / KIRI / Polycam) or SPZ (Niantic's
 //                gzipped splat format). → a triangle mesh or a raw point set.
@@ -19,6 +19,7 @@
 //   3. LEVEL   — RANSAC finds the dominant plane (the tabletop / floor),
 //                PCA-refines it, and rotates the cloud so it lies on y = 0
 //                with the subject above. Scans are rarely exported level.
+//                It only counts as ground if ~nothing lies beneath it.
 //   4. FRAME   — points above the plane are the "figure"; the cloud is
 //                centred on it and scaled so the figure is ~1 unit tall.
 //                Far-off ground is cropped.
@@ -99,9 +100,9 @@ function nodeMatrix(node) {
   ];
 }
 
-/** Parse a GLB into one merged, world-space triangle mesh plus the first
- *  base-colour texture's encoded image bytes. */
-export function parseGlb(buf) {
+const DRACO_EXT = 'KHR_draco_mesh_compression';
+
+function readGlbChunks(buf) {
   const dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('glb: bad magic');
   if (dv.getUint32(4, true) !== 2) throw new Error('glb: only glTF 2.0 is supported');
@@ -114,21 +115,87 @@ export function parseGlb(buf) {
     off += 8 + len;
   }
   if (!json) throw new Error('glb: no JSON chunk');
-  const required = json.extensionsRequired || [];
-  if (required.some(e => /draco|meshopt/i.test(e))) {
-    throw new Error('glb: compressed (Draco/meshopt) — re-export without mesh compression');
+  return { json, bin };
+}
+
+/** Cheap peek: does this GLB need the Draco decoder? */
+export function glbUsesDraco(buf) {
+  try { return (readGlbChunks(buf).json.extensionsUsed || []).includes(DRACO_EXT); }
+  catch { return false; }
+}
+
+// Decode one KHR_draco_mesh_compression primitive with an initialised
+// Draco decoder module (three's draco_wasm_wrapper + .wasm, loaded by the
+// caller). Returns float attributes keyed by glTF semantic + the indices.
+function decodeDracoPrimitive(draco, json, bin, ext) {
+  const bv = json.bufferViews[ext.bufferView];
+  const data = new Int8Array(bin.buffer, bin.byteOffset + (bv.byteOffset || 0), bv.byteLength);
+  const decoder = new draco.Decoder();
+  const mesh = new draco.Mesh();
+  try {
+    const status = decoder.DecodeArrayToMesh(data, data.byteLength, mesh);
+    if (!status.ok() || mesh.ptr === 0) throw new Error(`glb: Draco decode failed (${status.error_msg()})`);
+    const out = {};
+    for (const [name, id] of Object.entries(ext.attributes || {})) {
+      const a = decoder.GetAttributeByUniqueId(mesh, id);
+      const n = mesh.num_points() * a.num_components();
+      const ptr = draco._malloc(n * 4);
+      decoder.GetAttributeDataArrayForAllPoints(mesh, a, draco.DT_FLOAT32, n * 4, ptr);
+      out[name] = new Float32Array(draco.HEAPF32.buffer, ptr, n).slice();
+      draco._free(ptr);
+    }
+    const ni = mesh.num_faces() * 3;
+    const ptr = draco._malloc(ni * 4);
+    decoder.GetTrianglesUInt32Array(mesh, ni * 4, ptr);
+    out.indices = new Uint32Array(draco.HEAPF32.buffer, ptr, ni).slice();
+    draco._free(ptr);
+    return out;
+  } finally {
+    draco.destroy(mesh);
+    draco.destroy(decoder);
   }
+}
+
+/** Parse a GLB into one merged, world-space triangle mesh. Every vertex
+ *  carries its part's colour (material baseColorFactor × COLOR_0), so
+ *  untextured multi-part models (NASA spacecraft) keep their colours; the
+ *  first base-colour texture is returned as encoded image bytes, with a
+ *  per-vertex mask of which parts use it. Draco primitives need `draco`. */
+export function parseGlb(buf, { draco = null } = {}) {
+  const { json, bin } = readGlbChunks(buf);
+  const required = json.extensionsRequired || [];
+  if (required.some(e => /meshopt/i.test(e))) {
+    throw new Error('glb: meshopt-compressed — re-export without meshopt compression');
+  }
+  if (required.includes(DRACO_EXT) && !draco) throw new Error('glb: Draco-compressed and no Draco decoder available');
   if (!bin) throw new Error('glb: no binary chunk');
 
-  const pos = [], idx = [], uv = [];
-  let vertBase = 0, hasUv = false, material = null;
+  // The one texture we sample: the first material that has a base-colour map.
+  const texIndex = (json.materials || []).map(m => m.pbrMetallicRoughness?.baseColorTexture?.index).find(i => i != null);
+
+  const pos = [], idx = [], uv = [], col = [], texMask = [];
+  let vertBase = 0, hasUv = false;
   const visit = (ni, parent) => {
     const node = json.nodes[ni];
     const m = mat4Mul(parent, nodeMatrix(node));
     if (node.mesh != null) {
       for (const prim of json.meshes[node.mesh].primitives) {
         if ((prim.mode ?? 4) !== 4 || prim.attributes.POSITION == null) continue;
-        const p = readAccessor(json, bin, prim.attributes.POSITION);
+        const dext = prim.extensions?.[DRACO_EXT];
+        const dec = dext && draco ? decodeDracoPrimitive(draco, json, bin, dext) : null;
+        const attr = (name) => {
+          if (dec && dec[name]) {
+            // Normalized integer accessors may come back as raw integers
+            // (depends on the encoder) — rescale only if they're out of 0..1.
+            const acc = json.accessors[prim.attributes[name]];
+            const max = acc?.normalized ? COMP_TYPES[acc.componentType]?.[2] : 1;
+            const d = dec[name];
+            if (max && max !== 1 && d.some(v => v > 1)) for (let i = 0; i < d.length; i++) d[i] /= max;
+            return d;
+          }
+          return prim.attributes[name] != null ? readAccessor(json, bin, prim.attributes[name]) : null;
+        };
+        const p = attr('POSITION');
         const n = p.length / 3;
         for (let i = 0; i < n; i++) {
           const x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2];
@@ -136,21 +203,23 @@ export function parseGlb(buf) {
                    m[1] * x + m[5] * y + m[9] * z + m[13],
                    m[2] * x + m[6] * y + m[10] * z + m[14]);
         }
-        if (prim.attributes.TEXCOORD_0 != null) {
-          const t = readAccessor(json, bin, prim.attributes.TEXCOORD_0);
-          for (let i = 0; i < t.length; i++) uv.push(t[i]);
-          hasUv = true;
-        } else {
-          for (let i = 0; i < n * 2; i++) uv.push(0);
+        const mat = prim.material != null ? json.materials?.[prim.material] : null;
+        const pbr = mat?.pbrMetallicRoughness || {};
+        const f = pbr.baseColorFactor || [1, 1, 1, 1];
+        const vc = attr('COLOR_0');
+        const vcN = vc ? vc.length / n : 0;          // VEC3 or VEC4
+        for (let i = 0; i < n; i++) {
+          for (let k = 0; k < 3; k++) col.push(f[k] * (vc ? vc[i * vcN + k] : 1));
         }
-        if (prim.indices != null) {
-          const ix = readAccessor(json, bin, prim.indices);
-          for (let i = 0; i < ix.length; i++) idx.push(ix[i] + vertBase);
-        } else {
-          for (let i = 0; i < n; i++) idx.push(i + vertBase);
-        }
+        const t = attr('TEXCOORD_0');
+        const textured = t && texIndex != null && pbr.baseColorTexture?.index === texIndex ? 1 : 0;
+        if (t) { for (let i = 0; i < t.length; i++) uv.push(t[i]); hasUv = true; }
+        else for (let i = 0; i < n * 2; i++) uv.push(0);
+        for (let i = 0; i < n; i++) texMask.push(textured);
+        const ix = dec ? dec.indices : prim.indices != null ? readAccessor(json, bin, prim.indices) : null;
+        if (ix) for (let i = 0; i < ix.length; i++) idx.push(ix[i] + vertBase);
+        else for (let i = 0; i < n; i++) idx.push(i + vertBase);
         vertBase += n;
-        if (!material && prim.material != null) material = json.materials?.[prim.material] || null;
       }
     }
     for (const c of node.children || []) visit(c, m);
@@ -160,10 +229,7 @@ export function parseGlb(buf) {
   for (const r of roots) visit(r, mat4Identity());
   if (!pos.length) throw new Error('glb: no triangle meshes found');
 
-  const pbr = material?.pbrMetallicRoughness || {};
-  const baseColor = (pbr.baseColorFactor || [1, 1, 1, 1]).slice(0, 3);
   let image = null;
-  const texIndex = pbr.baseColorTexture?.index;
   if (texIndex != null && hasUv) {
     const img = json.images?.[json.textures?.[texIndex]?.source];
     if (img && img.bufferView != null) {
@@ -179,8 +245,9 @@ export function parseGlb(buf) {
     positions: new Float32Array(pos),
     indices: new Uint32Array(idx),
     uvs: hasUv ? new Float32Array(uv) : null,
-    vcolors: null,
-    baseColor,
+    vcolors: new Float32Array(col),
+    texMask: image ? Uint8Array.from(texMask) : null,
+    baseColor: [1, 1, 1],
     image,
   };
 }
@@ -481,7 +548,7 @@ export function sampleMesh(mesh, count, texture, rng) {
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const normals = new Float32Array(count * 3);
-  const UV = mesh.uvs, VC = mesh.vcolors, base = mesh.baseColor || [1, 1, 1];
+  const UV = mesh.uvs, VC = mesh.vcolors, TM = mesh.texMask, base = mesh.baseColor || [1, 1, 1];
   const tex = UV && texture ? texture : null;
   for (let i = 0; i < count; i++) {
     const r = rng() * total;
@@ -495,16 +562,15 @@ export function sampleMesh(mesh, count, texture, rng) {
       positions[i * 3 + k] = P[ia * 3 + k] * wa + P[ib * 3 + k] * wb + P[ic * 3 + k] * wc;
       normals[i * 3 + k] = fn[t * 3 + k];
     }
-    if (tex) {
+    if (tex && (!TM || TM[ia])) {
       let u = UV[ia * 2] * wa + UV[ib * 2] * wb + UV[ic * 2] * wc;
       let v = UV[ia * 2 + 1] * wa + UV[ib * 2 + 1] * wb + UV[ic * 2 + 1] * wc;
       u -= Math.floor(u); v -= Math.floor(v);                  // REPEAT wrap
       const px = Math.min(tex.width - 1, (u * tex.width) | 0);
       const py = Math.min(tex.height - 1, (v * tex.height) | 0);  // glTF uv origin = image top-left
       const o = (py * tex.width + px) * 4;
-      colors[i * 3] = tex.data[o] / 255 * base[0];
-      colors[i * 3 + 1] = tex.data[o + 1] / 255 * base[1];
-      colors[i * 3 + 2] = tex.data[o + 2] / 255 * base[2];
+      // Texture × the part's colour factor (vertex colour when present).
+      for (let k = 0; k < 3; k++) colors[i * 3 + k] = tex.data[o + k] / 255 * (VC ? VC[ia * 3 + k] : base[k]);
     } else if (VC) {
       for (let k = 0; k < 3; k++) colors[i * 3 + k] = VC[ia * 3 + k] * wa + VC[ib * 3 + k] * wb + VC[ic * 3 + k] * wc;
     } else {
@@ -713,8 +779,9 @@ export function findGroundPlane(P, count, eps, rng) {
     const h = normal[0] * P[s] + normal[1] * P[s + 1] + normal[2] * P[s + 2] + d;
     if (h > 2 * eps) above++; else if (h < -2 * eps) below++;
   }
-  if (below > above) return { normal: normal.map(v => -v), d: -d, inlierFrac: best.inl / S };
-  return { normal, d, inlierFrac: best.inl / S };
+  const offFrac = Math.min(above, below) / Math.max(1, above + below);
+  if (below > above) return { normal: normal.map(v => -v), d: -d, inlierFrac: best.inl / S, offFrac };
+  return { normal, d, inlierFrac: best.inl / S, offFrac };
 }
 
 // Rotation taking unit vector n onto +y (Rodrigues), as a row-major 3×3.
@@ -864,12 +931,15 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
     for (let i = 0; i < count; i++) { P[i * 3 + 1] -= floor; height[i] = P[i * 3 + 1]; }
   }
 
-  // 2. Figure = what stands above the plane. Without a plane (or a near-empty
-  //    figure) the whole cloud is the figure.
+  // 2. Figure = what stands above the plane. The plane only counts as ground
+  //    when (almost) nothing lies beneath it — a real floor or tabletop. A
+  //    flat part mid-object (a satellite's solar panels, JWST's sunshield)
+  //    still levels the cloud, but the whole thing stays the figure. Same
+  //    without a plane, or with a near-empty figure.
   let fig = new Uint8Array(count);
   let nFig = 0;
   if (plane) for (let i = 0; i < count; i++) if (height[i] > 2 * eps) { fig[i] = 1; nFig++; }
-  const hasGround = !!plane && nFig >= count * 0.02;
+  const hasGround = !!plane && plane.offFrac < 0.1 && nFig >= count * 0.02;
   if (!hasGround) { fig.fill(1); nFig = count; }
 
   // 3. Centre on the figure (median x/z) and scale it to ~1 unit tall.
@@ -941,7 +1011,8 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
     dist, fig: figF, rand,
     stats: {
       count, figurePoints: fig.reduce((a, b) => a + b, 0), groundFound: hasGround,
-      groundInlierFrac: plane ? +plane.inlierFrac.toFixed(3) : 0, tiltDeg: +tiltDeg.toFixed(1),
+      groundInlierFrac: plane ? +plane.inlierFrac.toFixed(3) : 0, belowPlaneFrac: plane ? +plane.offFrac.toFixed(3) : 0,
+      tiltDeg: +tiltDeg.toFixed(1),
       figHeight: +figHeight.toFixed(3),
     },
   };
@@ -951,15 +1022,18 @@ export function buildCloud(sampled, { rng, groundRadius = 2.2 } = {}) {
  * Full pipeline: file bytes → render-ready cloud.
  * @param {ArrayBuffer|null} buf    scan file, or null for the procedural monolith
  * @param {number} count            target point count
- * @param {{decodeImage?: (bytes: Uint8Array, mime: string) => Promise<{width:number,height:number,data:Uint8ClampedArray}|null>, seed?: number}} opts
+ * @param {{decodeImage?: (bytes: Uint8Array, mime: string) => Promise<{width:number,height:number,data:Uint8ClampedArray}|null>, loadDraco?: () => Promise<any>, seed?: number}} opts
+ *   loadDraco resolves `{ draco }` — an initialised Draco decoder module,
+ *   wrapped because Emscripten modules are thenables (returning one bare from
+ *   a promise chain never settles). Only called for KHR_draco_mesh_compression GLBs.
  */
-export async function loadScan(buf, count, { decodeImage, seed = 1337 } = {}) {
+export async function loadScan(buf, count, { decodeImage, loadDraco, seed = 1337 } = {}) {
   const rng = mulberry32(seed);
   let src;
   if (!buf) src = monolithMesh();
   else {
     const fmt = detectFormat(buf);
-    if (fmt === 'glb') src = parseGlb(buf);
+    if (fmt === 'glb') src = parseGlb(buf, { draco: loadDraco && glbUsesDraco(buf) ? (await loadDraco()).draco : null });
     else if (fmt === 'ply') src = parsePly(buf);
     else if (fmt === 'spz') src = parseSpz(await gunzip(buf));
     else throw new Error('unrecognised scan format — expected .glb, .ply or .spz');

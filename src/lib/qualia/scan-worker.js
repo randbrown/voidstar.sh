@@ -7,8 +7,14 @@
 //   → { id, bytes: ArrayBuffer|null, count }   bytes=null → procedural monolith
 //   ← { id, cloud }                            typed arrays transferred
 //   ← { id, error }
+//
+// Draco-compressed GLBs pull in three's Draco decoder (~340 KB) on first use.
 
 import { loadScan } from './scan-cloud.js';
+// three's glTF-only Draco decoder, emitted as static assets and fetched only
+// when a Draco-compressed GLB shows up (NASA's 3D library uses it throughout).
+import dracoWrapperUrl from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url';
+import dracoWasmUrl from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url';
 
 // Base-colour textures are decoded at ≤1024² — plenty for per-point colour
 // and a quarter of the memory of a 4096² RGBA bitmap.
@@ -26,10 +32,30 @@ async function decodeImage(bytes, mime) {
   return { width: w, height: h, data: ctx.getImageData(0, 0, w, h).data };
 }
 
+let dracoPromise = null;
+function loadDraco() {
+  dracoPromise ||= (async () => {
+    const [js, wasmBinary] = await Promise.all([
+      fetch(dracoWrapperUrl).then(r => r.text()),
+      fetch(dracoWasmUrl).then(r => r.arrayBuffer()),
+    ]);
+    // The wrapper is a classic script defining DracoDecoderModule, and this
+    // is a module worker (no importScripts) — evaluate it in a function scope.
+    const factory = new Function(`${js}\nreturn DracoDecoderModule;`)();
+    // Stays wrapped all the way out: the Emscripten module is a thenable, so
+    // resolving or returning it bare would make the promise chase it forever.
+    return await new Promise((resolve) => {
+      factory({ wasmBinary, onModuleLoaded: (d) => resolve({ draco: d }) });
+    });
+  })();
+  dracoPromise.catch(() => { dracoPromise = null; });
+  return dracoPromise;
+}
+
 self.onmessage = async (e) => {
   const { id, bytes, count } = e.data || {};
   try {
-    const cloud = await loadScan(bytes || null, count, { decodeImage });
+    const cloud = await loadScan(bytes || null, count, { decodeImage, loadDraco });
     self.postMessage({ id, cloud }, [
       cloud.positions.buffer, cloud.colors.buffer, cloud.normals.buffer,
       cloud.dist.buffer, cloud.fig.buffer, cloud.rand.buffer,

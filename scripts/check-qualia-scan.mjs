@@ -12,7 +12,8 @@
 
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { loadScan, parseGlb, parsePly, parseSpz, detectFormat } from '../src/lib/qualia/scan-cloud.js';
+import { createRequire } from 'node:module';
+import { loadScan, parseGlb, parsePly, parseSpz, detectFormat, glbUsesDraco } from '../src/lib/qualia/scan-cloud.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -130,7 +131,117 @@ console.log('scan: GLB (tilted box on slab)');
 
   let threw = '';
   try { parseGlb(makeGlb(boxOnSlab(0), { extensionsRequired: ['KHR_draco_mesh_compression'] })); } catch (e) { threw = e.message; }
-  check('rejects Draco GLB with a clear error', /Draco/.test(threw), threw);
+  check('rejects a Draco GLB with a clear error when no decoder is given', /Draco/.test(threw), threw);
+}
+
+// ── Draco + per-part colours ────────────────────────────────────────────────
+// Loads three's Draco builds the same way scan-worker.js does (evaluated in a
+// function scope); under node the Emscripten glue also wants require/__dirname.
+// Modules stay wrapped in { m } — they're thenables (see loadScan).
+const DRACO_DIR = 'node_modules/three/examples/jsm/libs/draco/';
+function emscripten(file, name) {
+  const factory = new Function('require', '__dirname', '__filename',
+    `${readFileSync(DRACO_DIR + file, 'utf8')}\nreturn ${name};`)(createRequire(import.meta.url), DRACO_DIR, DRACO_DIR + file);
+  return new Promise((resolve) => {
+    const opts = { onModuleLoaded: (m) => resolve({ m }) };
+    if (file.endsWith('wasm_wrapper.js')) opts.wasmBinary = readFileSync(DRACO_DIR + 'gltf/draco_decoder.wasm');
+    factory(opts);
+  });
+}
+let decoderP;
+const loadDraco = () => (decoderP ||= emscripten('gltf/draco_wasm_wrapper.js', 'DracoDecoderModule').then(({ m }) => ({ draco: m })));
+
+// GLB whose one primitive is KHR_draco_mesh_compression-encoded.
+async function makeDracoGlb({ pos, idx }) {
+  const { m: enc } = await emscripten('draco_encoder.js', 'DracoEncoderModule');
+  const encoder = new enc.Encoder(), builder = new enc.MeshBuilder(), mesh = new enc.Mesh();
+  builder.AddFacesToMesh(mesh, idx.length / 3, idx);
+  const posId = builder.AddFloatAttributeToMesh(mesh, enc.POSITION, pos.length / 3, 3, pos);
+  const out = new enc.DracoInt8Array();
+  const len = encoder.EncodeMeshToDracoBuffer(mesh, out);
+  const draco = new Uint8Array(len);
+  for (let i = 0; i < len; i++) draco[i] = out.GetValue(i) & 255;
+  enc.destroy(out); enc.destroy(mesh); enc.destroy(builder); enc.destroy(encoder);
+  const json = {
+    asset: { version: '2.0' },
+    extensionsUsed: ['KHR_draco_mesh_compression'], extensionsRequired: ['KHR_draco_mesh_compression'],
+    scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1,
+      extensions: { KHR_draco_mesh_compression: { bufferView: 0, attributes: { POSITION: posId } } } }] }],
+    accessors: [
+      { componentType: 5126, count: pos.length / 3, type: 'VEC3' },
+      { componentType: 5125, count: idx.length, type: 'SCALAR' },
+    ],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: len }],
+    buffers: [{ byteLength: (len + 3) & ~3 }],
+  };
+  return packGlb(json, draco);
+}
+
+function packGlb(json, binBytes) {
+  const pad4 = (n) => (n + 3) & ~3;
+  const jb = new TextEncoder().encode(JSON.stringify(json));
+  const jl = pad4(jb.length), bl = pad4(binBytes.byteLength);
+  const total = 12 + 8 + jl + 8 + bl;
+  const out = new ArrayBuffer(total), dv = new DataView(out), u8 = new Uint8Array(out);
+  dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, jl, true); dv.setUint32(16, 0x4E4F534A, true);
+  u8.fill(0x20, 20, 20 + jl); u8.set(jb, 20);
+  dv.setUint32(20 + jl, bl, true); dv.setUint32(24 + jl, 0x004E4942, true);
+  u8.set(new Uint8Array(binBytes.buffer || binBytes, binBytes.byteOffset || 0, binBytes.byteLength), 28 + jl);
+  return out;
+}
+
+// Plain GLB, two primitives (slab, box) with different material colours.
+function makeTwoPartGlb() {
+  const g = boxOnSlab(0);
+  const slabIdx = g.idx.slice(0, 6), boxIdx = g.idx.slice(6);
+  const parts = [slabIdx, boxIdx, g.pos];
+  let off = 0; const views = [];
+  for (const p of parts) { views.push({ buffer: 0, byteOffset: off, byteLength: p.byteLength }); off = (off + p.byteLength + 3) & ~3; }
+  const bin = new Uint8Array(off);
+  parts.forEach((p, i) => bin.set(new Uint8Array(p.buffer, p.byteOffset, p.byteLength), views[i].byteOffset));
+  const json = {
+    asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [
+      { attributes: { POSITION: 2 }, indices: 0, material: 0 },
+      { attributes: { POSITION: 2 }, indices: 1, material: 1 },
+    ] }],
+    materials: [
+      { pbrMetallicRoughness: { baseColorFactor: [0.1, 0.2, 0.9, 1] } },
+      { pbrMetallicRoughness: { baseColorFactor: [0.9, 0.4, 0.1, 1] } },
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5125, count: slabIdx.length, type: 'SCALAR' },
+      { bufferView: 1, componentType: 5125, count: boxIdx.length, type: 'SCALAR' },
+      { bufferView: 2, componentType: 5126, count: g.pos.length / 3, type: 'VEC3' },
+    ],
+    bufferViews: views, buffers: [{ byteLength: bin.byteLength }],
+  };
+  return packGlb(json, bin);
+}
+
+console.log('scan: Draco GLB + per-part colours');
+{
+  const plain = await loadScan(makeGlb(boxOnSlab(25)), 40000, { decodeImage });
+  const dglb = await makeDracoGlb(boxOnSlab(25));
+  check('detects Draco via extensionsUsed', glbUsesDraco(dglb) && !glbUsesDraco(makeGlb(boxOnSlab(0))));
+  let threw = '';
+  try { await loadScan(dglb, 1000, {}); } catch (e) { threw = e.message; }
+  check('Draco GLB without a decoder fails clearly', /Draco/.test(threw), threw);
+  const c = await loadScan(dglb, 40000, { loadDraco });
+  const st = figureStats(c), sp = figureStats(plain);
+  check('Draco GLB decodes, levels and frames like the plain one',
+    c.stats.groundFound && Math.abs(c.stats.tiltDeg - 25) < 2 && Math.abs(st.ymax - sp.ymax) < 0.05 && st.corr < -0.7,
+    `tilt=${c.stats.tiltDeg} ymax=${st.ymax.toFixed(3)} corr=${st.corr.toFixed(3)}`);
+
+  const two = await loadScan(makeTwoPartGlb(), 20000, {});
+  let blueGround = 0, ng = 0, orangeFig = 0, nf = 0;
+  for (let i = 0; i < two.count; i++) {
+    const r = two.colors[i * 3], b = two.colors[i * 3 + 2];
+    if (two.fig[i]) { nf++; if (r > 0.85 && b < 0.15) orangeFig++; } else { ng++; if (b > 0.85 && r < 0.15) blueGround++; }
+  }
+  check('each part keeps its material colour', blueGround / ng > 0.95 && orangeFig / nf > 0.9, `ground ${blueGround}/${ng}, figure ${orangeFig}/${nf}`);
 }
 
 // ── PLY ────────────────────────────────────────────────────────────────────
@@ -239,7 +350,7 @@ console.log('scan: monolith');
 if (process.argv[2]) {
   const b = readFileSync(process.argv[2]);
   const t0 = performance.now();
-  const c = await loadScan(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), 200000, {});
+  const c = await loadScan(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), 200000, { loadDraco });
   console.log(`scan: ${process.argv[2]} (${(performance.now() - t0).toFixed(0)} ms, no texture decode under node)`);
   console.log('  ', JSON.stringify(c.stats));
 }
