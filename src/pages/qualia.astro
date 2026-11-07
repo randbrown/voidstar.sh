@@ -3165,6 +3165,31 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       overflow: hidden;
     }
     .qp-file-scope canvas { display: block; width: 100%; height: 100%; }
+    /* Lick practice block (deck). Rows of small controls under a <details>. */
+    .qp-practice {
+      border-top: 1px solid var(--border); padding-top: 0.35rem;
+      display: flex; flex-direction: column; gap: 0.35rem;
+    }
+    .qp-practice > summary {
+      cursor: pointer; font-size: 0.68rem; color: var(--muted);
+      letter-spacing: 0.03em; list-style-position: inside;
+    }
+    .qp-practice[open] > summary { margin-bottom: 0.35rem; }
+    .qp-practice-sum { color: var(--accent); }
+    .qp-practice-row { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+    .qp-practice-row + .qp-practice-row { margin-top: 0.35rem; }
+    .qp-practice-label { flex: 0 0 2.6rem; font-size: 0.68rem; color: var(--muted); }
+    .qp-practice-row input[type=range] { flex: 1; min-width: 0; }
+    .qp-practice-row select { min-width: 0; flex: 1; }
+    .qp-practice-row .ctrl-btn[disabled] { opacity: 0.35; }
+    .qp-practice-row [data-qp="grab"] { flex: 2; }
+    .qp-practice-chips .ctrl-btn { flex: 1; padding-left: 0; padding-right: 0; min-width: 0; }
+    .qp-practice-chips [data-qp="pitch-lock"] { flex: 2.4; }
+    .qp-practice-region { flex: 1; text-align: right; font-size: 0.66rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .qp-practice-st { min-width: 2.6rem; text-align: center; }
+    .qp-practice .qp-val { font-size: 0.72rem; }
+    .qp-practice .qp-val.hot { color: var(--accent); }
+    .qp-practice[open] { border-bottom: 1px solid var(--border); padding-bottom: 0.45rem; }
     @media (max-width: 700px) {
       #deck-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 94vw; }
     }
@@ -4612,6 +4637,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧G</kbd></span><span class="ctrl-lbl">deck: grab captured app audio to practice</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>;</kbd><kbd>'</kbd><kbd>\</kbd><kbd>⌫</kbd></span><span class="ctrl-lbl">freeze — grab/layer · pop · re-frz top · clear stack</span></div>
     </div>
 
@@ -5086,6 +5112,72 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-file-scope" data-qp="file-scope-wrap" title="Realtime scope — the track's live output as it feeds the mix">
         <canvas data-qp="file-scope" aria-label="Realtime output scope"></canvas>
       </div>
+      <!-- Lick practice: loop a region, slow it down (pitch held by time-stretch),
+           transpose, ramp the speed back up, and grab the last few seconds of
+           captured app audio (Spotify…) into the deck. See audio-file.js. -->
+      <details class="qp-practice" data-qp="practice" open>
+        <summary title="Practice tools — loop a lick, slow it down, ramp it back up">practice <span class="qp-practice-sum" data-qp="practice-sum"></span></summary>
+        <div class="qp-practice-row">
+          <span class="qp-practice-label">grab</span>
+          <select class="ctrl-btn" data-qp="grab-sec" aria-label="Grab length" title="How much of the captured app audio a grab takes (the lookback holds the last 40 s)">
+            <option value="5">5 s</option>
+            <option value="10" selected>10 s</option>
+            <option value="20">20 s</option>
+            <option value="30">30 s</option>
+            <option value="40">40 s</option>
+          </select>
+          <button type="button" class="ctrl-btn" data-qp="grab" disabled title="Grab the last few seconds of captured app audio into the deck (⇧G) — then set A/B on the lick and slow it down. Needs capture app audio on.">grab from app</button>
+        </div>
+        <div class="qp-practice-row">
+          <span class="qp-practice-label">loop</span>
+          <button type="button" class="ctrl-btn" data-qp="mark-a" title="Set the loop start (A) at the playhead. Or drag the A/B handles on the waveform, or shift-drag across it to draw a region.">A</button>
+          <button type="button" class="ctrl-btn" data-qp="mark-b" title="Set the loop end (B) at the playhead — turns loop on and jumps back to A">B</button>
+          <button type="button" class="ctrl-btn" data-qp="mark-clear" title="Clear the loop region (loop the whole track again)">clear</button>
+          <span class="qp-val qp-practice-region" data-qp="region-label">whole track</span>
+        </div>
+        <div class="qp-practice-row" title="Playback speed. Double-click to reset to 100%.">
+          <span class="qp-practice-label">speed</span>
+          <input type="range" min="0.25" max="1.5" step="0.05" value="1" data-qp="speed" aria-label="Deck speed">
+          <span class="qp-val" data-qp="speed-val">100%</span>
+        </div>
+        <div class="qp-practice-row qp-practice-chips">
+          <span class="qp-practice-label"></span>
+          <button type="button" class="ctrl-btn" data-qp="speed-chip" data-rate="0.5">50</button>
+          <button type="button" class="ctrl-btn" data-qp="speed-chip" data-rate="0.65">65</button>
+          <button type="button" class="ctrl-btn" data-qp="speed-chip" data-rate="0.75">75</button>
+          <button type="button" class="ctrl-btn" data-qp="speed-chip" data-rate="0.85">85</button>
+          <button type="button" class="ctrl-btn" data-qp="speed-chip" data-rate="1">100</button>
+          <button type="button" class="ctrl-btn" data-qp="pitch-lock" aria-pressed="true" title="Pitch lock — slow down without dropping the pitch (time-stretch). Off = varispeed, like a tape: half speed is an octave down.">pitch lock</button>
+        </div>
+        <div class="qp-practice-row">
+          <span class="qp-practice-label">key</span>
+          <button type="button" class="ctrl-btn" data-qp="transpose-down" title="Transpose down a semitone">−</button>
+          <span class="qp-val qp-practice-st" data-qp="transpose-val">0 st</span>
+          <button type="button" class="ctrl-btn" data-qp="transpose-up" title="Transpose up a semitone">+</button>
+          <button type="button" class="ctrl-btn" data-qp="transpose-reset" title="Back to the original key">0</button>
+        </div>
+        <div class="qp-practice-row">
+          <button type="button" class="ctrl-btn" data-qp="trainer" aria-pressed="false" title="Speed trainer — while looping, add a step every few passes until the target speed, then stop.">trainer</button>
+          <select class="ctrl-btn" data-qp="trainer-step" aria-label="Trainer step" title="Speed added per step">
+            <option value="0.02">+2%</option>
+            <option value="0.05" selected>+5%</option>
+            <option value="0.1">+10%</option>
+          </select>
+          <select class="ctrl-btn" data-qp="trainer-every" aria-label="Passes per step" title="Loop passes before each step">
+            <option value="1">every pass</option>
+            <option value="2" selected>every 2</option>
+            <option value="3">every 3</option>
+            <option value="4">every 4</option>
+            <option value="8">every 8</option>
+          </select>
+          <select class="ctrl-btn" data-qp="trainer-target" aria-label="Trainer target speed" title="Speed the trainer stops at">
+            <option value="0.75">→ 75%</option>
+            <option value="0.85">→ 85%</option>
+            <option value="0.9">→ 90%</option>
+            <option value="1" selected>→ 100%</option>
+          </select>
+        </div>
+      </details>
       <div class="qp-file-session">
         <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Uses whichever capture mode is selected (qfx / full tab / OBS); in OBS mode playback waits until OBS confirms it's rolling. Auto-saved, no trimming. Honors the recorder's auto-⛶ / auto-zen settings.">rec with play</button>
         <button type="button" class="ctrl-btn" data-qp="file-rigstem" aria-pressed="false" title="Also capture a separate rig-only audio stem during the recording, so you get the full-mix video AND an isolated rig track. Open the rig capture first.">+ rig stem</button>

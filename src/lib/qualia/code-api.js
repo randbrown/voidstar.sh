@@ -739,7 +739,27 @@ export function installCodeApi(deps) {
       duration: () => safe(() => filePlayer?.getDuration(), 0),
       /** True while the track is playing. */
       playing: () => !!safe(() => filePlayer?.isPlaying(), false),
-      /** Full snapshot: {ready, playing, loop, level, name, duration, position}. */
+      /** Practice: playback speed 0.25..1.5 (1 = normal) — get()/set(v). */
+      speed: gs(() => filePlayer?.getRate() ?? 1, (v) => filePlayer?.setRate(+v)),
+      /** Practice: hold the pitch when slowed (time-stretch) — get()/set(bool). */
+      pitchLock: gsBool(() => filePlayer?.getPitchLock() ?? true, (on) => filePlayer?.setPitchLock(on)),
+      /** Practice: transpose in semitones (−12..12) — get()/set(n). */
+      transpose: gs(() => filePlayer?.getTranspose() ?? 0, (v) => filePlayer?.setTranspose(+v)),
+      /** Practice: loop region. region() → {start, end} | null; region(a, b)
+       *  sets it (seconds; null leaves that side open); region(null) clears. */
+      region: (...args) => safe(() => {
+        if (!args.length) return filePlayer?.getRegion() ?? null;
+        if (args[0] === null && args.length === 1) { filePlayer?.clearRegion(); return null; }
+        filePlayer?.setRegion(args[0], args[1]);
+        return filePlayer?.getRegion() ?? null;
+      }, null),
+      /** Practice: speed trainer — trainer() → cfg; trainer({on, step, every, target}). */
+      trainer: (cfg) => safe(() => {
+        if (cfg && typeof cfg === 'object') filePlayer?.setTrainer(cfg);
+        return filePlayer?.getTrainer() ?? null;
+      }, null),
+      /** Full snapshot: {ready, playing, loop, level, name, duration, position,
+       *  rate, pitchLock, transpose, region, marks, trainer, stretching}. */
       state: () => safe(() => filePlayer?.getState(), null),
     },
 

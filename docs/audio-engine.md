@@ -437,6 +437,16 @@ selected as the ordinary mic input does the same job. The Spotify Web API can't
 help: it exposes no audio stream, and its audio-analysis endpoints are closed to
 new apps.
 
+**Lookback ring (grab into the deck).** While a capture runs, the source also
+feeds the looper's recorder worklet (`worklets/looper-recorder.js`, never armed
+here — only its always-on ~40 s ring is used) through a 0-gain sink to
+`destination` that just keeps it pulled. `grab(seconds)` posts back the last N
+seconds as per-channel `Float32Array`s; page-init hands them to the deck's
+`filePlayer.loadBuffer()` (loop on) — the *grab last Ns* button / `⇧G` /
+`padActions.deckGrab`. Cost: one block copy per render quantum on the audio thread
+and ~15 MB while capturing; `stop()` posts `dispose` so the ring is freed. Nothing
+runs when capture is off.
+
 ---
 
 ## audio-file.js — play an existing track through the signal
@@ -514,6 +524,41 @@ takes the PCM path rather than the video's muxed encoder. Both `getStemNode` and
 `getStemStream` are deliberately *not* gated by the source filter (the rig still
 plays into the mix while you tap its stem). Open the rig capture first, or the
 stem reports "no rig signal".
+
+### Lick practice (the deck's *practice* section)
+
+For learning a lick or a steel solo: loop a region, slow it down with the pitch
+held, transpose, and ramp the speed back up. Pure math lives in
+`deck-practice.js` (checked by `scripts/check-qualia-deck-practice.mjs`); the
+engine is `audio-file.js`; the controls are page-init's *Lick practice* block.
+
+- **A/B region** — `A` / `B` buttons set a marker at the playhead (`B` also turns
+  loop on and jumps back to A), the handles on the waveform drag, and shift-drag
+  across the waveform draws a fresh region. The region only bites while *loop* is
+  on. It plays from a short **copy** of the region with the looper's 8 ms
+  equal-power seam baked into the tail (real pre-roll before A when there is
+  some), so the wrap never clicks and the stretcher only ever holds a few seconds.
+  Copies are cached per (track, A, B).
+- **Speed** 25–150 % (slider + 50/65/75/85/100 chips) and **pitch lock**
+  (default on). Two playback paths, picked per play: a plain `BufferSource`
+  (rate 1, or any rate with pitch lock off = varispeed — half speed is an octave
+  down) and **signalsmith-stretch** (`looper-stretch.js`) in buffer mode when the
+  pitch has to be held or moved. The stretch node is created lazily on first need
+  and left inactive otherwise. Speed / lock / transpose changes apply in place
+  (`playbackRate` or a `schedule()` at the live head) unless the path changes, in
+  which case the source restarts at the head. The head position is analytic on
+  both paths (anchor + elapsed × rate, wrapped in the loop window).
+- **Transpose** ±12 semitones, always through the stretcher (with lock off the
+  stretcher also applies the varispeed drop, so lock off sounds the same on both
+  paths).
+- **Speed trainer** — counts loop wraps on the 10 Hz UI tick; every *N* passes it
+  adds the step (+2/5/10 %) until the target speed, then switches itself off.
+- **Grab from app** — see *Lookback ring* under app-capture.js above.
+
+Speed and transpose are **session-only on purpose** (a deck left at 65 % must
+never surprise a gig); pitch lock, the trainer setup, the grab length and the
+section's open state persist with the page settings. Code API:
+`qualia.player.speed / pitchLock / transpose / region / trainer`.
 
 ## modem.js — dial-up modem tone simulator
 
