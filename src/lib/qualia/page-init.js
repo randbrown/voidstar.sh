@@ -35,6 +35,7 @@ import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
+import { createAppCapture } from './app-capture.js';
 import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
 import { makeDraggablePanel, resetAllPanelPositions } from './panel-pos.js';
@@ -540,6 +541,10 @@ export function initQualiaPage() {
     filePlayerLevel: filePlayer.getLevel(),
     filePlayerLoop:  filePlayer.getLoop(),
     filePlayerMuted: filePlayer.getMuted(),
+    deckPitchLock:  filePlayer.getPitchLock(),
+    deckTrainer:    (({ step, every, target }) => ({ step, every, target }))(filePlayer.getTrainer()),
+    deckGrabSec:    parseFloat(deckPanel?.querySelector('[data-qp="grab-sec"]')?.value) || 10,
+    deckPracticeOpen: deckPanel?.querySelector('[data-qp="practice"]')?.open !== false,
     deckOpen:       deckPanel ? deckPanel.style.display !== 'none' : false,
     recWithPlay,
     recRigStem,
@@ -953,6 +958,7 @@ export function initQualiaPage() {
     // The playhead + waveform are drawn by the deck rAF loop (drawDeckWave);
     // here we only keep the clock in sync (leave it alone mid-scrub).
     if (fpTime && !_fpScrubbing) fpTime.textContent = `${fmtClock(s.position)} / ${fmtClock(s.duration)}`;
+    paintPractice(s);
   }
 
   const filePlayer = createAudioFilePlayer({
@@ -994,6 +1000,196 @@ export function initQualiaPage() {
   fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
   fpMute?.addEventListener('click', () => { filePlayer.setMuted(!filePlayer.getMuted()); settings.save(); });
 
+  // ── App audio capture ──────────────────────────────────────────────────────
+  // Another app's audio (Spotify, a YouTube tab, …) as the 'app' source, via the
+  // browser's share picker — see app-capture.js for what each browser/OS allows.
+  // Reactivity + recording only (the app is already audible), gated like 'file'.
+  const acBtn   = fpRoot?.querySelector('[data-qp="app-capture"]');
+  const acLabel = fpRoot?.querySelector('[data-qp="app-capture-label"]');
+  const appCapture = createAppCapture({ onChange: () => { syncAppCapture(); syncGrabBtn(); } });
+  function syncAppCapture() {
+    const an = appCapture.getFeedAnalyser(), actx = appCapture.getContext();
+    if (appCapture.isActive() && an && actx) audio.adoptAnalyser(actx, an, 'app');
+    else audio.releaseAdopted('app');
+    const on = appCapture.isActive();
+    if (acBtn) {
+      acBtn.textContent = on ? 'stop app audio' : 'capture app audio…';
+      acBtn.classList.toggle('active', on);
+      acBtn.setAttribute('aria-pressed', String(on));
+    }
+    if (acLabel && appCapture.isSupported()) {
+      acLabel.textContent = on ? appCapture.getLabel() : 'off';
+      acLabel.classList.toggle('loaded', on);
+    }  }
+  if (acBtn && !appCapture.isSupported()) {
+    acBtn.disabled = true;
+    acBtn.title = 'App audio capture needs desktop Chrome / Edge.';
+    // Tooltips don't show on touch, so say it in the label too.
+    if (acLabel) acLabel.textContent = 'desktop chrome / edge only';
+  }
+  acBtn?.addEventListener('click', async () => {
+    if (appCapture.isActive()) { await appCapture.stop(); return; }
+    try {
+      await appCapture.start();
+      // Same bump as deck play: 'off' → 'mix', 'mic' → 'all', so it's heard by the visuals.
+      if (audioMode === 'off') await setAudioMode('mix');
+      else if (audioMode === 'mic') await setAudioMode('all');
+    } catch (err) {
+      // Dismissing the picker is a NotAllowedError — not worth an alert.
+      if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') alert(err?.message || String(err));
+    }
+  });
+  syncAppCapture();
+
+  // ── Lick practice (deck) ───────────────────────────────────────────────────
+  // Loop a region, slow it down with the pitch held, transpose, ramp the speed
+  // back up — and grab the last few seconds of captured app audio into the deck
+  // so a lick from Spotify can be looped without owning the file. The engine is
+  // audio-file.js (+ deck-practice.js); this is just the controls. Speed and
+  // transpose deliberately DON'T persist (a deck left at 65 % must never
+  // surprise a gig); pitch lock, the trainer setup and the grab length do.
+  const prRoot    = deckPanel?.querySelector('[data-qp="practice"]');
+  const prQ       = (k) => prRoot?.querySelector(`[data-qp="${k}"]`);
+  const prSum     = prQ('practice-sum');
+  const prGrabSec = prQ('grab-sec');
+  const prGrab    = prQ('grab');
+  const prMarkA   = prQ('mark-a');
+  const prMarkB   = prQ('mark-b');
+  const prClear   = prQ('mark-clear');
+  const prRegion  = prQ('region-label');
+  const prSpeed   = prQ('speed');
+  const prSpeedV  = prQ('speed-val');
+  const prChips   = prRoot ? [...prRoot.querySelectorAll('[data-qp="speed-chip"]')] : [];
+  const prLock    = prQ('pitch-lock');
+  const prTrDown  = prQ('transpose-down');
+  const prTrUp    = prQ('transpose-up');
+  const prTrZero  = prQ('transpose-reset');
+  const prTrVal   = prQ('transpose-val');
+  const prTrainer = prQ('trainer');
+  const prTStep   = prQ('trainer-step');
+  const prTEvery  = prQ('trainer-every');
+  const prTTarget = prQ('trainer-target');
+  const fmtClockMs = (t) => {
+    const m = Math.floor(t / 60), sec = t - m * 60;
+    return `${m}:${sec < 10 ? '0' : ''}${sec.toFixed(1)}`;
+  };
+  const pct = (r) => `${Math.round(r * 100)}%`;
+
+  function paintPractice(st) {
+    if (!prRoot) return;
+    const s = st || filePlayer.getState();
+    const rate = s.rate ?? 1, tr = s.transpose ?? 0;
+    if (prSpeed && document.activeElement !== prSpeed) prSpeed.value = String(rate);
+    if (prSpeedV) { prSpeedV.textContent = pct(rate); prSpeedV.classList.toggle('hot', rate !== 1); }
+    for (const b of prChips) b.classList.toggle('active', Math.abs(parseFloat(b.dataset.rate) - rate) < 0.001);
+    if (prLock) { prLock.classList.toggle('active', !!s.pitchLock); prLock.setAttribute('aria-pressed', String(!!s.pitchLock)); }
+    if (prTrVal) { prTrVal.textContent = `${tr > 0 ? '+' : ''}${tr} st`; prTrVal.classList.toggle('hot', tr !== 0); }
+    const reg = s.region;
+    if (prRegion) {
+      prRegion.textContent = reg ? `${fmtClockMs(reg.start)} – ${fmtClockMs(reg.end)}${s.loop ? '' : ' (loop off)'}` : 'whole track';
+      prRegion.classList.toggle('hot', !!reg && s.loop);
+    }
+    for (const b of [prMarkA, prMarkB]) if (b) b.disabled = !s.ready;
+    if (prClear) prClear.disabled = !reg;
+    if (prMarkA) prMarkA.classList.toggle('active', (s.marks?.a ?? -1) >= 0);
+    if (prMarkB) prMarkB.classList.toggle('active', (s.marks?.b ?? -1) >= 0);
+    const t = s.trainer || {};
+    if (prTrainer) {
+      prTrainer.classList.toggle('active', !!t.on);
+      prTrainer.setAttribute('aria-pressed', String(!!t.on));
+      prTrainer.textContent = t.on ? 'training' : 'trainer';
+    }
+    if (prTStep && t.step != null && document.activeElement !== prTStep) prTStep.value = String(t.step);
+    if (prTEvery && t.every != null && document.activeElement !== prTEvery) prTEvery.value = String(t.every);
+    if (prTTarget && t.target != null && document.activeElement !== prTTarget) prTTarget.value = String(t.target);
+    if (prSum) {
+      const bits = [];
+      if (rate !== 1) bits.push(pct(rate));
+      if (tr) bits.push(`${tr > 0 ? '+' : ''}${tr} st`);
+      if (reg && s.loop) bits.push('A/B');
+      if (t.on) bits.push('training');
+      prSum.textContent = bits.length ? `· ${bits.join(' · ')}` : '';
+    }
+  }
+
+  function syncGrabBtn() {
+    if (!prGrab) return;
+    const ok = appCapture.isActive() && appCapture.canGrab();
+    prGrab.disabled = !ok;
+    prGrab.textContent = `grab last ${prGrabSec?.value || 10}s`;
+    prGrab.title = ok
+      ? 'Grab the last few seconds of captured app audio into the deck (⇧G) — then set A/B on the lick and slow it down.'
+      : 'Turn on "capture app audio…" first — the grab pulls from its lookback (last 40 s).';
+  }
+
+  async function grabFromApp() {
+    if (!appCapture.isActive() || !appCapture.canGrab()) { syncGrabBtn(); return false; }
+    const sec = parseFloat(prGrabSec?.value) || 10;
+    if (prGrab) { prGrab.disabled = true; prGrab.textContent = 'grabbing…'; }
+    const got = await appCapture.grab(sec);
+    syncGrabBtn();
+    if (!got) return false;
+    const now = new Date();
+    const label = `grab · ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    const ok = await filePlayer.loadBuffer(got.chans, got.sampleRate, label);
+    if (ok) filePlayer.setLoop(true);   // a grab is for looping
+    paintFilePlayer();
+    settings.save();
+    return ok;
+  }
+
+  prGrab?.addEventListener('click', () => { void grabFromApp(); });
+  prGrabSec?.addEventListener('change', () => { syncGrabBtn(); settings.save(); });
+  prMarkA?.addEventListener('click', () => {
+    const p = filePlayer.getPosition(), m = filePlayer.getMarks();
+    // A past an existing B drops B, so A always starts a fresh region.
+    filePlayer.setRegion(p, m.b >= 0 && m.b > p + 0.05 ? m.b : null);
+  });
+  prMarkB?.addEventListener('click', () => {
+    const p = filePlayer.getPosition(), m = filePlayer.getMarks();
+    if (!filePlayer.setRegion(m.a >= 0 && m.a < p ? m.a : null, p)) return;
+    filePlayer.setLoop(true);
+    settings.save();
+  });
+  prClear?.addEventListener('click', () => filePlayer.clearRegion());
+  if (prSpeed) {
+    prSpeed.addEventListener('input', () => filePlayer.setRate(parseFloat(prSpeed.value)));
+    prSpeed.addEventListener('dblclick', () => filePlayer.setRate(1));
+  }
+  for (const b of prChips) b.addEventListener('click', () => filePlayer.setRate(parseFloat(b.dataset.rate)));
+  prLock?.addEventListener('click', () => { filePlayer.setPitchLock(!filePlayer.getPitchLock()); settings.save(); });
+  prTrDown?.addEventListener('click', () => filePlayer.setTranspose(filePlayer.getTranspose() - 1));
+  prTrUp?.addEventListener('click', () => filePlayer.setTranspose(filePlayer.getTranspose() + 1));
+  prTrZero?.addEventListener('click', () => filePlayer.setTranspose(0));
+  prTrainer?.addEventListener('click', () => {
+    const on = !filePlayer.getTrainer().on;
+    // Turning it on also turns loop on — the trainer counts loop passes.
+    if (on && !filePlayer.getLoop()) filePlayer.setLoop(true);
+    filePlayer.setTrainer({ on });
+  });
+  const trainerCfgChanged = () => {
+    filePlayer.setTrainer({
+      step: parseFloat(prTStep?.value) || 0.05,
+      every: parseInt(prTEvery?.value, 10) || 2,
+      target: parseFloat(prTTarget?.value) || 1,
+    });
+    settings.save();
+  };
+  for (const el of [prTStep, prTEvery, prTTarget]) el?.addEventListener('change', trainerCfgChanged);
+  prRoot?.addEventListener('toggle', () => settings.save());
+
+  // Restore the persisted practice setup (not speed / transpose — see above).
+  if (typeof stored.deckPitchLock === 'boolean') filePlayer.setPitchLock(stored.deckPitchLock);
+  if (stored.deckTrainer && typeof stored.deckTrainer === 'object') {
+    const { step, every, target } = stored.deckTrainer;
+    filePlayer.setTrainer({ step, every, target });
+  }
+  if (prGrabSec && stored.deckGrabSec && [...prGrabSec.options].some(o => o.value === String(stored.deckGrabSec))) {
+    prGrabSec.value = String(stored.deckGrabSec);
+  }
+  if (prRoot && stored.deckPracticeOpen === false) prRoot.open = false;
+  syncGrabBtn();
+
   // ── Deck waveform (scrubber) + realtime scope ──────────────────────────────
   // The overall waveform doubles as the scrubber — click/drag maps x → time and
   // seeks on release (a single seek, so dragging never restarts the source
@@ -1005,6 +1201,7 @@ export function initQualiaPage() {
   let waveOff = null, waveOffKey = '';    // offscreen static-waveform bitmap + its (size,buffer) key
   let scopeBuf = null;                    // reused byte buffer for the scope trace
   let deckRAF = 0, deckSkip = false;
+  let _regionDrag = null;                 // A/B handle drag / shift-draw in progress
 
   // Deck waveform/scope colours follow the active theme's accents (cyan for the
   // wave + playhead, pink while scrubbing / near clip) instead of hardcoded
@@ -1073,6 +1270,7 @@ export function initQualiaPage() {
     if (!off) return;                       // no track loaded — empty label shows through
     g.drawImage(off, 0, 0);
     const dur = filePlayer.getDuration?.() || 0;
+    if (dur > 0) drawDeckRegion(g, W, H, dur);
     if (dur > 0) {
       const t = _scrubTime >= 0 ? _scrubTime : (filePlayer.getPosition?.() || 0);
       const x = Math.max(0, Math.min(1, t / dur)) * W;
@@ -1081,6 +1279,31 @@ export function initQualiaPage() {
       g.strokeStyle = _scrubTime >= 0 ? DECK_K.ac.pink.rgba(0.95) : DECK_K.ac.cyan.rgba(0.95);
       g.lineWidth = Math.max(1, Math.round(deckDpr()));
       g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke();
+    }
+  }
+
+  // A/B loop region over the waveform: a tint between the markers (stronger
+  // while loop is on), the outside dimmed, and a handle line at each set mark.
+  function drawDeckRegion(g, W, H, dur) {
+    const m = _regionDrag ? _regionDrag.preview : filePlayer.getMarks?.();
+    if (!m || (m.a < 0 && m.b < 0)) return;
+    const looping = !!filePlayer.getLoop?.();
+    const xa = (m.a >= 0 ? m.a : 0) / dur * W;
+    const xb = (m.b >= 0 ? m.b : dur) / dur * W;
+    g.fillStyle = 'rgba(0,0,0,0.35)';
+    g.fillRect(0, 0, Math.max(0, xa), H);
+    g.fillRect(xb, 0, Math.max(0, W - xb), H);
+    g.fillStyle = DECK_K.ac.pink.rgba(looping ? 0.12 : 0.05);
+    g.fillRect(xa, 0, Math.max(0, xb - xa), H);
+    g.strokeStyle = DECK_K.ac.pink.rgba(looping ? 0.95 : 0.5);
+    g.lineWidth = Math.max(1, Math.round(deckDpr()));
+    g.fillStyle = DECK_K.ac.pink.rgba(looping ? 0.95 : 0.5);
+    const tab = Math.round(5 * deckDpr());
+    for (const [x, set, dir] of [[xa, m.a >= 0, 1], [xb, m.b >= 0, -1]]) {
+      if (!set) continue;
+      g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke();
+      // Small flag at the top so the handle reads as grabbable.
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x + dir * tab, 0); g.lineTo(x, tab * 1.6); g.closePath(); g.fill();
     }
   }
 
@@ -1126,8 +1349,34 @@ export function initQualiaPage() {
     };
     const showScrub = () => { if (fpTime) fpTime.textContent = `${fmtClock(_scrubTime)} / ${fmtClock(filePlayer.getDuration())}`; };
     let wavePid = null;
+    // Region editing on the waveform: grab an A/B handle (within ~8 px) to
+    // move it, or shift-drag across the waveform to draw a fresh region.
+    // A plain click/drag elsewhere still scrubs.
+    const HANDLE_PX = 8;
+    const handleAt = (clientX) => {
+      const m = filePlayer.getMarks?.(), dur = filePlayer.getDuration?.() || 0;
+      if (!m || dur <= 0) return null;
+      const r = fpWave.getBoundingClientRect();
+      const near = (t) => t >= 0 && Math.abs(r.left + (t / dur) * r.width - clientX) <= HANDLE_PX;
+      if (near(m.b)) return 'b';
+      if (near(m.a)) return 'a';
+      return null;
+    };
     fpWaveWrap.addEventListener('pointerdown', (e) => {
       if (!filePlayer.isReady?.()) return;
+      const h = e.shiftKey ? null : handleAt(e.clientX);
+      if (h || e.shiftKey) {
+        const m = filePlayer.getMarks();
+        const t = waveTimeAt(e.clientX);
+        _regionDrag = {
+          pid: e.pointerId, edge: h || 'b', origin: t,
+          preview: h ? { ...m } : { a: t, b: t },
+          fresh: !h,
+        };
+        try { fpWaveWrap.setPointerCapture(e.pointerId); } catch {}
+        e.preventDefault();
+        return;
+      }
       wavePid = e.pointerId;
       _fpScrubbing = true;
       _scrubTime = waveTimeAt(e.clientX);
@@ -1136,11 +1385,31 @@ export function initQualiaPage() {
       e.preventDefault();
     });
     fpWaveWrap.addEventListener('pointermove', (e) => {
+      if (_regionDrag && e.pointerId === _regionDrag.pid) {
+        const t = waveTimeAt(e.clientX), d = _regionDrag;
+        if (d.fresh) d.preview = { a: Math.min(d.origin, t), b: Math.max(d.origin, t) };
+        else d.preview = { ...d.preview, [d.edge]: t };
+        if (fpTime) fpTime.textContent = `${fmtClockMs(Math.max(0, d.preview.a))} – ${fmtClockMs(Math.max(0, d.preview.b >= 0 ? d.preview.b : filePlayer.getDuration()))}`;
+        return;
+      }
+      if (!_regionDrag) {
+        // Hint the handles with a resize cursor.
+        fpWaveWrap.style.cursor = handleAt(e.clientX) ? 'col-resize' : '';
+      }
       if (wavePid === null || e.pointerId !== wavePid) return;
       _scrubTime = waveTimeAt(e.clientX);
       showScrub();
     });
     const waveCommit = (e) => {
+      if (_regionDrag && e.pointerId === _regionDrag.pid) {
+        const d = _regionDrag;
+        _regionDrag = null;
+        try { fpWaveWrap.releasePointerCapture(e.pointerId); } catch {}
+        const { a, b } = d.preview;
+        if (filePlayer.setRegion(a, b) && d.fresh) { filePlayer.setLoop(true); settings.save(); }
+        paintFilePlayer();
+        return;
+      }
       if (wavePid === null || e.pointerId !== wavePid) return;
       const t = _scrubTime;
       _scrubTime = -1; _fpScrubbing = false; wavePid = null;
@@ -1883,8 +2152,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                                            break;
       case 'mic': audio.setSourceFilter(['mic']);                                                       break;
-      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);  break;
+      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file', 'app']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file', 'app']);  break;
     }
   }
 
@@ -8695,6 +8964,8 @@ export function initQualiaPage() {
     recDelayCycle: () => looper.cycleRecordDelay?.(),
     recTransient: () => looper.toggleRecordTransient?.(),
     grab:         () => document.getElementById('btn-looper-retro')?.click(),
+    // Lick practice: pull the last few seconds of captured app audio into the deck.
+    deckGrab:     () => { void grabFromApp(); },
     camSize:      () => { if (btnCamera.style.display !== 'none') btnCamera.click(); },
     camNext:      () => {
       if (camSelect && !camSelect.disabled && camSelect.options.length > 1) {
@@ -8966,7 +9237,7 @@ export function initQualiaPage() {
       case 'm': padActions.camMirror(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
-      case 'g': btnAura.click(); break;
+      case 'g': if (e.shiftKey) padActions.deckGrab(); else btnAura.click(); break;   // aura / ⇧ grab app audio into the deck
       case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
       case 't': if (e.shiftKey) cycleTheme(1); else btnAscii.click(); break;   // ascii / ⇧ next theme
       case 'k': btnMosh.click(); break;

@@ -519,7 +519,13 @@ qualia.player.seek(90)             // jump to 1:30
 qualia.player.loop(true)           // get()/set() — loop the track
 qualia.player.level(0.8)           // get()/set() — playback level (0..~1.5)
 qualia.player.position(); qualia.player.duration(); qualia.player.playing()
-qualia.player.state()              // {ready, playing, loop, level, name, duration, position}
+qualia.player.state()              // {ready, playing, loop, level, name, duration, position, rate, pitchLock, transpose, region, trainer, …}
+// Lick practice (the deck's practice section):
+qualia.player.region(92.5, 97)     // A/B loop region in seconds (null leaves a side open); region(null) clears
+qualia.player.speed(0.65)          // get()/set() — 0.25..1.5
+qualia.player.pitchLock(true)      // get()/set() — hold the pitch when slowed (time-stretch)
+qualia.player.transpose(-2)        // get()/set() — semitones, −12..12
+qualia.player.trainer({ on: true, step: 0.05, every: 2, target: 1 })   // ramp the speed up every N loop passes
 
 qualia.mixer.setLevel("strudel", .7)   // 'mic'|'rig'|'strudel'|'seq'|'vox'
 qualia.mixer.setMuted("seq", true); qualia.mixer.setLimiter("vox", true)
