@@ -196,6 +196,32 @@ const buildStamp = readBuildStamp();
       color: var(--text-muted);
       font-family: var(--font-mono);
     }
+    /* Archived setlists: still tappable (to copy / restore / perform), but
+       visibly out of rotation. */
+    .sl-archive-section { margin-top: 1.25rem; }
+    .sl-archive-section .sl-grid { margin-top: 0.75rem; }
+    .sl-setlist-card-archived { opacity: 0.6; border-style: dashed; }
+    .sl-setlist-card-archived:hover { opacity: 0.9; }
+    .sl-archived-tag {
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .sl-archived-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      padding: 0.5rem 0.75rem;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-lg, 10px);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .sl-danger-zone .sl-action-bar { margin-bottom: 1rem; }
     .sl-setlist-meta {
       font-size: 0.85rem;
       color: var(--text-muted);

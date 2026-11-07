@@ -343,6 +343,53 @@ export const getSetlist = (id) => getOne(SETLISTS, id);
 export const getAllSetlists = () => getAll(SETLISTS);
 export const deleteSetlist = (id) => delWithTombstone(SETLISTS, id);
 
+// Archive = hidden from the dashboard's main list, never deleted: still
+// openable, copyable, performable and restorable. `archivedAt` (epoch ms, 0 /
+// absent = active) is deliberately NOT in SETLIST_FILL_FIELDS — un-archiving
+// writes 0, and that has to win the backup merge by plain last-writer-wins
+// instead of being "filled" back from an older archived copy.
+export const isArchived = (sl) => !!sl?.archivedAt;
+export function setArchived(sl, archived) {
+  return putSetlist({ ...sl, archivedAt: archived ? Date.now() : 0 });
+}
+
+// A new setlist cloned from `source` — same sets/running order, per-gig song
+// overrides (keys, steel entry, vocalists, segues), vocalist legend and
+// reference links — under a fresh id, ready to be renamed / re-venued /
+// re-ordered without touching the original. Songs are shared library records,
+// so nothing below the setlist is duplicated. Pure (no IndexedDB), so it's
+// node-tested by scripts/check-setlist-copy.mjs.
+//
+// Dropped on purpose:
+//   gigDate        a copy is almost always for another gig (override to keep)
+//   archivedAt     copying an archived set is how you bring an old gig back
+//   clearedFields  tombstones are about the original's edit history
+//   playlists[kind:'export']  the ORIGINAL's built Spotify playlist — kept, a
+//                  rebuild from the copy would overwrite the original gig's
+//                  playlist instead of making its own
+export function copySetlist(source, overrides = {}) {
+  const src = JSON.parse(JSON.stringify(source || {}));
+  const now = Date.now();
+  const { id: _id, createdAt: _c, updatedAt: _u, archivedAt: _a, clearedFields: _cf, ...rest } = src;
+  return {
+    ...rest,
+    name: `${src.name || 'setlist'} (copy)`,
+    sets: Array.isArray(src.sets) && src.sets.length
+      ? src.sets.map((s) => ({ ...s, name: s.name || 'Set', songIds: [...(s.songIds || [])] }))
+      : [{ name: 'Set 1', songIds: [] }],
+    gigDate: '',
+    venue: src.venue || '',
+    playlists: (Array.isArray(src.playlists) ? src.playlists : []).filter((p) => p?.kind !== 'export'),
+    vocalistLegend: src.vocalistLegend || {},
+    songOverrides: src.songOverrides || {},
+    ...overrides,
+    id: crypto.randomUUID(),
+    copiedFrom: src.id || '',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 // ── Annotations (hand-drawn chart markup, keyed by songId) ──
 // A song's PRIMARY chart keeps the bare songId key; each alternate chart
 // (song.altCharts) keys its own annotation record — and its offline blob in
