@@ -1131,7 +1131,7 @@ export function initQualiaPage() {
     if (!got) return false;
     const now = new Date();
     const label = `grab · ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-    const ok = filePlayer.loadBuffer(got.chans, got.sampleRate, label);
+    const ok = await filePlayer.loadBuffer(got.chans, got.sampleRate, label);
     if (ok) filePlayer.setLoop(true);   // a grab is for looping
     paintFilePlayer();
     settings.save();

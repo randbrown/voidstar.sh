@@ -53,6 +53,14 @@ import { registerContext, resumeContext } from './audio-unlock.js';
 // (same as looper-audio.js).
 import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 
+function makeCaptureContext(track) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  let rate = 0;
+  try { rate = track.getSettings?.().sampleRate || 0; } catch {}
+  if (!(rate >= 8000 && rate <= 192000)) rate = 48000;
+  try { return new AC({ sampleRate: rate }); } catch { return new AC(); }
+}
+
 // Matches RING_SECONDS in worklets/looper-recorder.js.
 export const RING_SECONDS = 40;
 
@@ -98,7 +106,13 @@ export function createAppCapture(opts = {}) {
       throw new Error('No audio was shared. Pick a browser tab (or "Entire screen" on Windows / ChromeOS) and turn on "Share audio" in the picker.');
     }
     stream = s;
-    ctx = registerContext(new (window.AudioContext || window.webkitAudioContext)());
+    // Run the capture context at the TRACK's rate (tab / system audio is 48 kHz
+    // in Chromium). A MediaStreamSource in a context at another rate (a 44.1 kHz
+    // output device is common) gets resampled on the fly, and that path drops
+    // and repeats blocks — inaudible as a reactivity feed, but a grab of it
+    // comes out garbled and off-pitch. The context never plays to the speakers
+    // (only a 0-gain sink), so its rate needn't match the output.
+    ctx = registerContext(makeCaptureContext(track));
     // Awaiting the picker spends the user-gesture activation; bounded resume
     // (audio-unlock.js retries on the next gesture if this one hangs).
     await resumeContext(ctx);

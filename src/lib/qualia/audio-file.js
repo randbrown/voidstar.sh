@@ -49,6 +49,18 @@ import {
   stretchSemitones, needsStretch, bakeRegionSeam, trainerAdvance, SEAM_FADE_SEC,
 } from './deck-practice.js';
 
+// Offline-render an AudioBuffer at another sample rate (the browser's own
+// high-quality resampler, same one decodeAudioData uses).
+async function resampleTo(buf, rate) {
+  const frames = Math.max(1, Math.round(buf.length * rate / buf.sampleRate));
+  const off = new OfflineAudioContext(buf.numberOfChannels, frames, rate);
+  const src = off.createBufferSource();
+  src.buffer = buf;
+  src.connect(off.destination);
+  src.start();
+  return off.startRendering();
+}
+
 export function createAudioFilePlayer(opts = {}) {
   const onFeedChange = typeof opts.onFeedChange === 'function' ? opts.onFeedChange : () => {};
   const onState      = typeof opts.onState === 'function' ? opts.onState : () => {};
@@ -257,6 +269,8 @@ export function createAudioFilePlayer(opts = {}) {
     const gen = _gen;
     const w = win;
     mode = 'pending';
+    // The stretcher reads raw samples at ctx rate; anything else plays plain.
+    if (w.buf.sampleRate !== ctx.sampleRate) { mode = null; startPlain(at); return; }
     const node = await ensureStretch(w.buf.numberOfChannels);
     if (gen !== _gen) return;                         // paused / restarted meanwhile
     if (!node) { mode = null; startPlain(at); return; } // library failed → varispeed
@@ -402,13 +416,18 @@ export function createAudioFilePlayer(opts = {}) {
     /** Load raw PCM (one Float32Array per channel at `sampleRate`) as the
      *  current track — how a grab from captured app audio lands in the deck.
      *  Replaces (and stops) any current track. Returns true on success. */
-    loadBuffer: (chans, sampleRate, label) => {
+    loadBuffer: async (chans, sampleRate, label) => {
       if (!chans?.length || !chans[0]?.length) return false;
       ensure();
       api.stop();
       try {
-        const b = ctx.createBuffer(chans.length, chans[0].length, sampleRate || ctx.sampleRate);
+        let b = new AudioBuffer({ numberOfChannels: chans.length, length: chans[0].length, sampleRate: sampleRate || ctx.sampleRate });
         for (let c = 0; c < chans.length; c++) b.copyToChannel(chans[c], c);
+        // Bring it to the deck's own rate. A plain BufferSource would resample
+        // on the fly, but the stretcher reads raw samples as if they were at
+        // ctx rate — a 48 kHz grab in a 44.1 kHz deck would come out ~1.5 st
+        // sharp and fast. Same as decodeAudioData does for files.
+        if (b.sampleRate !== ctx.sampleRate) b = await resampleTo(b, ctx.sampleRate);
         buffer = b;
         name = label || 'clip';
         resetForNewTrack();
