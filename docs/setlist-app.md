@@ -28,7 +28,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 |---|---|---|
 | `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm` stays in the model (chart-doc headers and "read chart" read/write it) and `capo` only as something **"read chart" finds written on someone else's chart** — generated charts never state a capo and nothing else fills the field. Both have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `lyricsId` (lazy) is the LRCLIB entry the current lyrics came from, `lyricsRejectedIds` (lazy, ≤ 20) the entries marked wrong for this song — auto-fill and the picker skip them — and `lyricsEdited` (lazy) marks hand-edited text; see the fixing-wrong-lyrics section. `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
-| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
+| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, archivedAt, copiedFrom, createdAt, updatedAt}` — `archivedAt` (lazy, epoch ms; 0/absent = active) and `copiedFrom` (lazy, the source setlist's id) are covered in the copy-and-archive section. The three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt, full}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise; PDFs are stored as one PNG with every page stacked). `full` marks entries cached with whole-document rendering — see the chart-rendering section. Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
@@ -135,6 +135,38 @@ page (both directions: "» into <next>" on the outgoing song, "<prev> »" on
 the incoming one), and the same two-sided cues in perform mode; toggled by
 hand via the `»` button on setlist-edit rows. The marker travels with the
 song through reorders (it always points at whatever now follows it).
+
+### Copying and archiving setlists
+
+**Copy** (`copy` on the setlist view's top bar, and next to archive/delete at
+the foot of the edit page) asks for a name (default `<name> (copy)`), saves
+`store.copySetlist(sl, {name})` and opens the copy's **edit page** — venue,
+date, songs and running order are all changed there, and the original is
+untouched. The copy is deep (its own `sets`, `songOverrides`,
+`vocalistLegend`) but songs are shared library records, so nothing below the
+setlist is duplicated. It keeps venue, the reference URLs and imported
+`playlists`; it drops `gigDate` (a copy is nearly always for another gig),
+`archivedAt` (copying an archived set is how you bring an old gig back),
+`clearedFields`, and the original's `kind:'export'` playlist entry — keeping
+that would make "build Spotify playlist" on the copy overwrite the original
+gig's playlist. `copiedFrom` records the source id (provenance only).
+
+**Archive** hides a setlist from the dashboard's main list without deleting
+it — it stays openable, performable, copyable, and restorable. `archive` /
+`unarchive` sits at the foot of the edit page (archiving returns home with an
+undo toast); an archived setlist's view and edit page carry a banner with
+`unarchive`. The dashboard shows `▸ show archived (N)` (expanded state is
+module-scope, so a focus refresh keeps it open; a reload collapses it) with
+archived cards dimmed and dashed, and `archive past gigs (N)` when active
+setlists have a `gigDate` before today (local), archiving them all in one tap
+with undo. Auto-link and verify-links still read archived setlists' reference
+playlists — archived gigs remain valid evidence for matching.
+
+`archivedAt` is deliberately **not** in `SETLIST_FILL_FIELDS`: un-archiving
+writes `0`, which must win the backup merge by plain last-writer-wins rather
+than be "filled" back from an older archived copy.
+`scripts/check-setlist-copy.mjs` covers the copy rules and both merge
+directions.
 
 ### Arranging sets (setlist edit)
 

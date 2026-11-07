@@ -416,6 +416,74 @@ function syncNowButton() {
 
 // ── Dashboard ──
 
+// Dashboard: are archived setlists expanded? Module scope so a focus-driven
+// refresh() keeps the section open; a reload starts collapsed again.
+let _showArchived = false;
+
+// YYYY-MM-DD in local time — the same shape the setlist <input type=date>
+// stores, so gig dates compare as plain strings.
+function localDateKey(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function setlistGrid(setlists, { archived = false } = {}) {
+  const grid = el('div', 'sl-grid');
+  for (const sl of setlists) {
+    const songCount = sl.sets.reduce((n, s) => n + s.songIds.length, 0);
+    const card = el('div', `sl-setlist-card${archived ? ' sl-setlist-card-archived' : ''}`);
+    card.innerHTML = `
+      <div class="sl-setlist-card-title">${esc(sl.name)}</div>
+      <div class="sl-setlist-card-meta">
+        ${archived ? '<span class="sl-archived-tag">archived</span>' : ''}
+        ${sl.venue ? `<span>${esc(sl.venue)}</span>` : ''}
+        ${sl.gigDate ? `<span>${esc(sl.gigDate)}</span>` : ''}
+        <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
+        <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
+        ${updatedStamp(sl.updatedAt)}
+      </div>
+    `;
+    card.addEventListener('click', () => navigate(`#setlist/${sl.id}`));
+    grid.appendChild(card);
+  }
+  return grid;
+}
+
+// Copy a setlist: ask for the new name, save the clone, and land on its edit
+// page — venue, date, songs and running order are all edited there, and the
+// original is untouched.
+async function copySetlistFlow(sl) {
+  const name = prompt('Name for the copy:', `${sl.name} (copy)`);
+  if (name == null) return;
+  const copy = store.copySetlist(sl, { name: name.trim() || `${sl.name} (copy)` });
+  await store.putSetlist(copy);
+  // The toast clears itself on hashchange, so post it after the navigation's
+  // own hashchange has fired, not before.
+  window.addEventListener('hashchange', () => {
+    setTimeout(() => showToast(`copied "${sl.name}" — set the venue, date and songs here`), 0);
+  }, { once: true });
+  navigate(`#setlist/${copy.id}/edit`);
+}
+
+function copySetlistButton(sl, cls = 'sl-btn-ghost') {
+  const b = btn('copy', cls, () => copySetlistFlow(sl));
+  b.title = 'Make a new setlist from this one (same songs, order and per-gig overrides) to rename, re-venue and rearrange';
+  return b;
+}
+
+// Archived banner for the setlist view / edit page: says so, and restores in
+// one tap.
+function archivedBanner(sl) {
+  const bar = el('div', 'sl-archived-banner');
+  const when = sl.archivedAt ? ` ${formatRelativeTime(sl.archivedAt)}` : '';
+  bar.appendChild(el('span', '', `archived${esc(when)} — hidden from the setlist list`));
+  bar.appendChild(btn('unarchive', 'sl-btn-ghost sl-btn-sm', async () => {
+    await store.setArchived(sl, false);
+    refresh();
+  }));
+  return bar;
+}
+
 export async function renderDashboard(root) {
   const bar = topBar('setlist');
   const homeLink = el('a', 'sl-btn sl-btn-icon', '⬡');
@@ -504,24 +572,44 @@ export async function renderDashboard(root) {
     root.appendChild(emptyState('No setlists yet. Create one or import from text.'));
   } else {
     setlists.sort((a, b) => b.updatedAt - a.updatedAt);
-    const grid = el('div', 'sl-grid');
-    for (const sl of setlists) {
-      const songCount = sl.sets.reduce((n, s) => n + s.songIds.length, 0);
-      const card = el('div', 'sl-setlist-card');
-      card.innerHTML = `
-        <div class="sl-setlist-card-title">${esc(sl.name)}</div>
-        <div class="sl-setlist-card-meta">
-          ${sl.venue ? `<span>${esc(sl.venue)}</span>` : ''}
-          ${sl.gigDate ? `<span>${esc(sl.gigDate)}</span>` : ''}
-          <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
-          <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
-          ${updatedStamp(sl.updatedAt)}
-        </div>
-      `;
-      card.addEventListener('click', () => navigate(`#setlist/${sl.id}`));
-      grid.appendChild(card);
+    const active = setlists.filter((sl) => !store.isArchived(sl));
+    const archived = setlists.filter(store.isArchived)
+      .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
+    if (active.length) root.appendChild(setlistGrid(active));
+    else root.appendChild(emptyState('Every setlist is archived — open one below to copy or restore it.'));
+
+    // Past gigs: an active setlist whose gig date is behind us. One tap
+    // tidies them all into the archive (with undo) instead of one by one.
+    const today = localDateKey(new Date());
+    const past = active.filter((sl) => /^\d{4}-\d{2}-\d{2}$/.test(sl.gigDate || '') && sl.gigDate < today);
+
+    if (archived.length || past.length) {
+      const arch = el('div', 'sl-section sl-archive-section');
+      const head = el('div', 'sl-action-bar');
+      if (archived.length) {
+        head.appendChild(btn(
+          `${_showArchived ? '▾ hide' : '▸ show'} archived (${archived.length})`,
+          'sl-btn-ghost sl-btn-sm',
+          () => { _showArchived = !_showArchived; refresh(); },
+        ));
+      }
+      if (past.length) {
+        const b = btn(`archive past gigs (${past.length})`, 'sl-btn-ghost sl-btn-sm', async () => {
+          const stamped = past.map((sl) => ({ ...sl }));
+          for (const sl of stamped) await store.setArchived(sl, true);
+          refresh();
+          showUndoToast(`archived ${stamped.length} past gig${stamped.length !== 1 ? 's' : ''}`, async () => {
+            for (const sl of stamped) await store.setArchived(sl, false);
+            refresh();
+          });
+        });
+        b.title = `Archive the setlists dated before today: ${past.map((sl) => sl.name).join(', ')}`;
+        head.appendChild(b);
+      }
+      arch.appendChild(head);
+      if (_showArchived && archived.length) arch.appendChild(setlistGrid(archived, { archived: true }));
+      root.appendChild(arch);
     }
-    root.appendChild(grid);
   }
 
   // Export/Import section
@@ -1254,6 +1342,7 @@ export async function renderSetlistView(root, setlistId) {
   actions.appendChild(autoLinkBtn);
   actions.appendChild(btn('perform', 'sl-btn-accent', () => navigate(`#perform/${sl.id}`)));
   actions.appendChild(btn('edit', 'sl-btn-ghost', () => navigate(`#setlist/${sl.id}/edit`)));
+  actions.appendChild(copySetlistButton(sl));
   actions.appendChild(btn('⇣', 'sl-btn-icon', async () => {
     const data = await store.exportSetlist(sl.id);
     if (data) downloadJson(data, `setlist-${sl.name.replace(/\s+/g, '-').toLowerCase()}.json`);
@@ -1261,6 +1350,7 @@ export async function renderSetlistView(root, setlistId) {
   appendNavShortcuts(actions);
   bar.appendChild(actions);
   root.appendChild(bar);
+  if (store.isArchived(sl)) root.appendChild(archivedBanner(sl));
 
   const metaParts = [];
   if (sl.venue) metaParts.push(esc(sl.venue));
@@ -1469,6 +1559,7 @@ export async function renderSetlistEdit(root, setlistId) {
   };
   paintUpdated(sl.updatedAt);
   root.appendChild(updatedLine);
+  if (store.isArchived(sl)) root.appendChild(archivedBanner(sl));
 
   const form = el('div', 'sl-edit-form');
   form.innerHTML = `
@@ -2228,6 +2319,27 @@ export async function renderSetlistEdit(root, setlistId) {
 
   // Danger zone
   const danger = el('div', 'sl-section sl-danger-zone');
+  const keep = el('div', 'sl-action-bar');
+  keep.appendChild(copySetlistButton(sl, 'sl-btn-ghost'));
+  const archived = store.isArchived(sl);
+  const archiveBtn = btn(archived ? 'unarchive' : 'archive', 'sl-btn-ghost', async () => {
+    await store.setArchived(sl, !archived);
+    if (archived) { refresh(); return; }
+    navigate('#home');
+    // Post-navigation, like the copy toast (hashchange clears toasts).
+    window.addEventListener('hashchange', () => setTimeout(() => {
+      showUndoToast(`archived "${sl.name}"`, async () => {
+        const cur = await store.getSetlist(sl.id);
+        if (cur) await store.setArchived(cur, false);
+        refresh();
+      });
+    }, 0), { once: true });
+  });
+  archiveBtn.title = archived
+    ? 'Put this setlist back in the main list'
+    : 'Hide this setlist from the main list without deleting it — it stays copyable and restorable';
+  keep.appendChild(archiveBtn);
+  danger.appendChild(keep);
   danger.appendChild(btn('delete setlist', 'sl-btn-danger', async () => {
     if (!confirm(`Delete "${sl.name}"? Songs will remain in your library.`)) return;
     await store.deleteSetlist(sl.id);
