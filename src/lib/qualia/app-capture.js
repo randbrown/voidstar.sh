@@ -49,29 +49,16 @@
 // app is still never monitored twice).
 
 import { registerContext, resumeContext } from './audio-unlock.js';
-// `?url&no-inline` so Vite emits the worklet as a file addModule() can load
-// (same as looper-audio.js).
-import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
+import { attachRing, makeStreamContext, RING_SECONDS } from './stream-ring.js';
 
-function makeCaptureContext(track) {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  let rate = 0;
-  try { rate = track.getSettings?.().sampleRate || 0; } catch {}
-  if (!(rate >= 8000 && rate <= 192000)) rate = 48000;
-  try { return new AC({ sampleRate: rate }); } catch { return new AC(); }
-}
-
-// Matches RING_SECONDS in worklets/looper-recorder.js.
-export const RING_SECONDS = 40;
+export { RING_SECONDS };
 
 export function createAppCapture(opts = {}) {
   const onChange = typeof opts.onChange === 'function' ? opts.onChange : () => {};
 
   let stream = null, ctx = null, srcNode = null, analyser = null;
-  let ringNode = null, sink = null, ringStartT = 0;
+  let ring = null;              // stream-ring.js lookback, while capturing
   let label = '';
-  let grabId = 0;
-  const pendingGrabs = new Map();
 
   /** True when the browser exposes display capture at all. Audio support can
    *  only be confirmed by the stream that comes back. */
@@ -112,7 +99,7 @@ export function createAppCapture(opts = {}) {
     // and repeats blocks — inaudible as a reactivity feed, but a grab of it
     // comes out garbled and off-pitch. The context never plays to the speakers
     // (only a 0-gain sink), so its rate needn't match the output.
-    ctx = registerContext(makeCaptureContext(track));
+    ctx = registerContext(makeStreamContext(track));
     // Awaiting the picker spends the user-gesture activation; bounded resume
     // (audio-unlock.js retries on the next gesture if this one hangs).
     await resumeContext(ctx);
@@ -121,7 +108,8 @@ export function createAppCapture(opts = {}) {
     analyser.smoothingTimeConstant = 0.40;
     srcNode = ctx.createMediaStreamSource(new MediaStream([track]));
     srcNode.connect(analyser);
-    await attachRing();
+    ring = await attachRing(ctx, srcNode);
+    if (!ring) console.warn('[qualia] app-capture lookback ring unavailable');
     label = describe(s, track);
     // The user can end the share from the browser's own "Stop sharing" bar.
     for (const t of s.getTracks()) t.addEventListener('ended', () => { if (stream === s) void stop(); });
@@ -129,56 +117,12 @@ export function createAppCapture(opts = {}) {
     return label;
   }
 
-  // Hang the lookback ring off the source. Best-effort: if the worklet can't
-  // load, capture still drives the visuals and grab reports it's unavailable.
-  async function attachRing() {
-    const c = ctx;
-    try {
-      if (!c?.audioWorklet?.addModule) return;
-      await c.audioWorklet.addModule(recorderWorkletUrl);
-      if (ctx !== c || !srcNode) return;               // stopped while loading
-      ringNode = new AudioWorkletNode(c, 'looper-recorder', {
-        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
-      });
-      ringNode.port.onmessage = (e) => {
-        const d = e.data;
-        if (d?.grab === undefined) return;
-        const resolve = pendingGrabs.get(d.grab);
-        if (resolve) { pendingGrabs.delete(d.grab); resolve(d); }
-      };
-      sink = c.createGain();
-      sink.gain.value = 0;
-      srcNode.connect(ringNode);
-      ringNode.connect(sink);
-      sink.connect(c.destination);
-      ringStartT = c.currentTime;
-    } catch (err) {
-      console.warn('[qualia] app-capture lookback ring unavailable:', err);
-      ringNode = null;
-    }
-  }
-
   /** Seconds of lookback held so far (0 when there's no ring). */
-  function ringSeconds() {
-    if (!ringNode || !ctx) return 0;
-    return Math.min(RING_SECONDS, Math.max(0, ctx.currentTime - ringStartT));
-  }
+  const ringSeconds = () => (ring ? ring.seconds() : 0);
 
   /** The last `seconds` of captured audio as `{ chans, sampleRate }`, or null
    *  if nothing is captured / held yet. */
-  function grab(seconds) {
-    if (!ringNode) return Promise.resolve(null);
-    const id = ++grabId;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => { pendingGrabs.delete(id); resolve(null); }, 2000);
-      pendingGrabs.set(id, (d) => {
-        clearTimeout(timer);
-        resolve(d?.chans?.length ? { chans: d.chans, sampleRate: d.sampleRate || ctx?.sampleRate || 48000 } : null);
-      });
-      try { ringNode.port.postMessage({ cmd: 'grab', seconds, id }); }
-      catch { clearTimeout(timer); pendingGrabs.delete(id); resolve(null); }
-    });
-  }
+  const grab = (seconds) => (ring ? ring.grab(seconds) : Promise.resolve(null));
 
   function describe(s, audioTrack) {
     const v = s.getVideoTracks()[0];
@@ -206,11 +150,8 @@ export function createAppCapture(opts = {}) {
     try { srcNode?.disconnect(); } catch {}
     srcNode = null;
     // Free the ~15 MB ring (the processor ends itself on 'dispose').
-    if (ringNode) { try { ringNode.port.postMessage({ cmd: 'dispose' }); ringNode.disconnect(); } catch {} }
-    try { sink?.disconnect(); } catch {}
-    ringNode = null; sink = null;
-    for (const resolve of pendingGrabs.values()) resolve(null);
-    pendingGrabs.clear();
+    ring?.dispose();
+    ring = null;
     if (s) { try { s.getTracks().forEach(t => t.stop()); } catch {} }
     if (c) { try { await c.close(); } catch {} }
   }
@@ -222,7 +163,7 @@ export function createAppCapture(opts = {}) {
     stop,
     grab,
     ringSeconds,
-    canGrab:         () => !!ringNode,
+    canGrab:         () => !!ring,
     getLabel:        () => label,
     getContext:      () => ctx,
     getFeedAnalyser: () => analyser,

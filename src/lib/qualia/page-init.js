@@ -36,6 +36,7 @@ import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
 import { createAppCapture } from './app-capture.js';
+import { createStreamRing } from './stream-ring.js';
 import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
 import { makeDraggablePanel, resetAllPanelPositions } from './panel-pos.js';
@@ -543,6 +544,7 @@ export function initQualiaPage() {
     filePlayerMuted: filePlayer.getMuted(),
     deckPitchLock:  filePlayer.getPitchLock(),
     deckTrainer:    (({ step, every, target }) => ({ step, every, target }))(filePlayer.getTrainer()),
+    deckGrabSrc:    deckPanel?.querySelector('[data-qp="grab-src"]')?.value === 'mic' ? 'mic' : 'app',
     deckGrabSec:    parseFloat(deckPanel?.querySelector('[data-qp="grab-sec"]')?.value) || 10,
     deckPracticeOpen: deckPanel?.querySelector('[data-qp="practice"]')?.open !== false,
     deckOpen:       deckPanel ? deckPanel.style.display !== 'none' : false,
@@ -1051,6 +1053,7 @@ export function initQualiaPage() {
   const prRoot    = deckPanel?.querySelector('[data-qp="practice"]');
   const prQ       = (k) => prRoot?.querySelector(`[data-qp="${k}"]`);
   const prSum     = prQ('practice-sum');
+  const prGrabSrc = prQ('grab-src');
   const prGrabSec = prQ('grab-sec');
   const prGrab    = prQ('grab');
   const prMarkA   = prQ('mark-a');
@@ -1112,25 +1115,62 @@ export function initQualiaPage() {
     }
   }
 
+  // Grab sources: 'app' = the share-picker capture's ring (app-capture.js);
+  // 'mic' = a ring on qualia's own mic input — pick a loopback device
+  // (BlackHole, VB-Cable, a PipeWire monitor) as the mic to grab from the
+  // Spotify desktop app. The mic ring only exists while 'mic' is selected and
+  // the mic is open; a light 1 s check re-attaches it when the mic device
+  // changes (audio.js reopens the stream).
+  let micRing = null, micRingBusy = false, micRingTimer = 0;
+  const grabSrc = () => (prGrabSrc?.value === 'mic' ? 'mic' : 'app');
+  async function syncMicRing() {
+    const stream = grabSrc() === 'mic' ? audio.getMicStream?.() : null;
+    const live = stream && stream.active ? stream : null;
+    if (micRing && micRing.stream !== live) { micRing.dispose(); micRing = null; }
+    if (live && !micRing && !micRingBusy) {
+      micRingBusy = true;
+      try { micRing = await createStreamRing(live); }
+      catch (err) { console.warn('[qualia] mic lookback ring failed:', err); }
+      finally { micRingBusy = false; }
+      // Lost the race with a source switch / device change — drop it.
+      if (micRing && (grabSrc() !== 'mic' || audio.getMicStream?.() !== micRing.stream)) { micRing.dispose(); micRing = null; }
+    }
+    syncGrabBtn();
+  }
+  function applyGrabSrc() {
+    if (grabSrc() === 'mic') {
+      if (!micRingTimer) micRingTimer = setInterval(() => { void syncMicRing(); }, 1000);
+      void syncMicRing();
+    } else {
+      if (micRingTimer) { clearInterval(micRingTimer); micRingTimer = 0; }
+      if (micRing) { micRing.dispose(); micRing = null; }
+      syncGrabBtn();
+    }
+  }
+
   function syncGrabBtn() {
     if (!prGrab) return;
-    const ok = appCapture.isActive() && appCapture.canGrab();
+    const mic = grabSrc() === 'mic';
+    const ok = mic ? !!micRing : (appCapture.isActive() && appCapture.canGrab());
     prGrab.disabled = !ok;
     prGrab.textContent = `grab last ${prGrabSec?.value || 10}s`;
     prGrab.title = ok
-      ? 'Grab the last few seconds of captured app audio into the deck (⇧G) — then set A/B on the lick and slow it down.'
-      : 'Turn on "capture app audio…" first — the grab pulls from its lookback (last 40 s).';
+      ? `Grab the last few seconds of the ${mic ? 'mic input' : 'captured app audio'} into the deck (⇧G) — then set A/B on the lick and slow it down.`
+      : mic
+        ? 'Open the mic first: pick your loopback device (e.g. BlackHole 2ch) as the mic and set audio to mic or all. The grab pulls from its last 40 s.'
+        : 'Turn on "capture app audio…" first — the grab pulls from its lookback (last 40 s).';
   }
 
-  async function grabFromApp() {
-    if (!appCapture.isActive() || !appCapture.canGrab()) { syncGrabBtn(); return false; }
+  async function grabIntoDeck() {
+    const mic = grabSrc() === 'mic';
+    if (mic ? !micRing : (!appCapture.isActive() || !appCapture.canGrab())) { syncGrabBtn(); return false; }
     const sec = parseFloat(prGrabSec?.value) || 10;
     if (prGrab) { prGrab.disabled = true; prGrab.textContent = 'grabbing…'; }
-    const got = await appCapture.grab(sec);
+    const got = await (mic ? micRing.grab(sec) : appCapture.grab(sec));
     syncGrabBtn();
     if (!got) return false;
     const now = new Date();
-    const label = `grab · ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    const label = `grab${mic ? ' · mic' : ''} · ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
     const ok = await filePlayer.loadBuffer(got.chans, got.sampleRate, label);
     if (ok) filePlayer.setLoop(true);   // a grab is for looping
     paintFilePlayer();
@@ -1138,8 +1178,9 @@ export function initQualiaPage() {
     return ok;
   }
 
-  prGrab?.addEventListener('click', () => { void grabFromApp(); });
+  prGrab?.addEventListener('click', () => { void grabIntoDeck(); });
   prGrabSec?.addEventListener('change', () => { syncGrabBtn(); settings.save(); });
+  prGrabSrc?.addEventListener('change', () => { applyGrabSrc(); settings.save(); });
   prMarkA?.addEventListener('click', () => {
     const p = filePlayer.getPosition(), m = filePlayer.getMarks();
     // A past an existing B drops B, so A always starts a fresh region.
@@ -1188,7 +1229,8 @@ export function initQualiaPage() {
     prGrabSec.value = String(stored.deckGrabSec);
   }
   if (prRoot && stored.deckPracticeOpen === false) prRoot.open = false;
-  syncGrabBtn();
+  if (prGrabSrc && stored.deckGrabSrc === 'mic') prGrabSrc.value = 'mic';
+  applyGrabSrc();
 
   // ── Deck waveform (scrubber) + realtime scope ──────────────────────────────
   // The overall waveform doubles as the scrubber — click/drag maps x → time and
@@ -8965,7 +9007,7 @@ export function initQualiaPage() {
     recTransient: () => looper.toggleRecordTransient?.(),
     grab:         () => document.getElementById('btn-looper-retro')?.click(),
     // Lick practice: pull the last few seconds of captured app audio into the deck.
-    deckGrab:     () => { void grabFromApp(); },
+    deckGrab:     () => { void grabIntoDeck(); },
     camSize:      () => { if (btnCamera.style.display !== 'none') btnCamera.click(); },
     camNext:      () => {
       if (camSelect && !camSelect.disabled && camSelect.options.length > 1) {

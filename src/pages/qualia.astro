@@ -5119,6 +5119,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <summary title="Practice tools — loop a lick, slow it down, ramp it back up">practice <span class="qp-practice-sum" data-qp="practice-sum"></span></summary>
         <div class="qp-practice-row">
           <span class="qp-practice-label">grab</span>
+          <select class="ctrl-btn" data-qp="grab-src" aria-label="Grab source" title="What a grab pulls from: app = the capture app audio share (a Chrome tab is the reliable route); mic = the qualia mic input, e.g. a BlackHole / loopback device carrying the Spotify desktop app">
+            <option value="app" selected>app</option>
+            <option value="mic">mic in</option>
+          </select>
           <select class="ctrl-btn" data-qp="grab-sec" aria-label="Grab length" title="How much of the captured app audio a grab takes (the lookback holds the last 40 s)">
             <option value="5">5 s</option>
             <option value="10" selected>10 s</option>
@@ -5126,7 +5130,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
             <option value="30">30 s</option>
             <option value="40">40 s</option>
           </select>
-          <button type="button" class="ctrl-btn" data-qp="grab" disabled title="Grab the last few seconds of captured app audio into the deck (⇧G) — then set A/B on the lick and slow it down. Needs capture app audio on.">grab from app</button>
+          <button type="button" class="ctrl-btn" data-qp="grab" disabled title="Grab the last few seconds into the deck (⇧G) — then set A/B on the lick and slow it down.">grab</button>
         </div>
         <div class="qp-practice-row">
           <span class="qp-practice-label">loop</span>

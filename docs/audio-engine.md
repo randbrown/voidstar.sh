@@ -444,7 +444,7 @@ help: it exposes no audio stream, and its audio-analysis endpoints are closed to
 new apps.
 
 **Lookback ring (grab into the deck).** While a capture runs, the source also
-feeds the looper's recorder worklet (`worklets/looper-recorder.js`, never armed
+feeds (via `stream-ring.js`'s `attachRing`) the looper's recorder worklet (`worklets/looper-recorder.js`, never armed
 here — only its always-on ~40 s ring is used) through a 0-gain sink to
 `destination` that just keeps it pulled. `grab(seconds)` posts back the last N
 seconds as per-channel `Float32Array`s; page-init hands them to the deck's
@@ -559,7 +559,15 @@ engine is `audio-file.js`; the controls are page-init's *Lick practice* block.
   paths).
 - **Speed trainer** — counts loop wraps on the 10 Hz UI tick; every *N* passes it
   adds the step (+2/5/10 %) until the target speed, then switches itself off.
-- **Grab from app** — see *Lookback ring* under app-capture.js above.
+- **Grab** — a source picker (`app` / `mic in`) plus a length (5–40 s). `app` reads
+  the share-picker capture's ring (see *Lookback ring* under app-capture.js above).
+  `mic in` reads a ring on qualia's own mic input (`createStreamRing` on
+  `audio.getMicStream()`, `stream-ring.js`), which is the route for a native
+  app through a loopback device: Spotify → a macOS Multi-Output Device (speakers +
+  BlackHole 2ch, both 48 kHz) and BlackHole picked as the qualia mic, with the mic
+  strip's output faded/muted so it isn't monitored twice (reactivity and the ring
+  tap pre-fader). The mic ring exists only while `mic in` is selected and the mic is
+  open. A 1 s check re-attaches it when the device changes.
 
 Speed and transpose are **session-only on purpose** (a deck left at 65 % must
 never surprise a gig); pitch lock, the trainer setup, the grab length and the
