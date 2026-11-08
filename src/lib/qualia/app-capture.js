@@ -183,11 +183,18 @@ export function createAppCapture(opts = {}) {
   function describe(s, audioTrack) {
     const v = s.getVideoTracks()[0];
     const surface = v?.getSettings?.().displaySurface;
-    const name = (v?.label || audioTrack.label || '').replace(/^(web-contents-media-stream|screen|window):\/\/\S*/i, '').trim();
-    if (surface === 'browser') return name ? `tab · ${name}` : 'browser tab';
-    if (surface === 'monitor') return 'system audio';
-    if (surface === 'window')  return name ? `window · ${name}` : 'window';
-    return name || 'app audio';
+    // Chromium labels look like "window:160:0" / "screen:1:0" / "web-contents-media-stream://…".
+    const name = (v?.label || audioTrack.label || '')
+      .replace(/^(web-contents-media-stream|screen|window):\/\/\S*/i, '')
+      .replace(/^(screen|window):\d+(:\d+)*$/i, '')
+      .trim();
+    // The audio track's reported rate, for troubleshooting a garbled capture.
+    let rate = '';
+    try { const r = audioTrack.getSettings?.().sampleRate; if (r) rate = ` · ${Math.round(r / 100) / 10}k`; } catch {}
+    if (surface === 'browser') return (name ? `tab · ${name}` : 'browser tab') + rate;
+    if (surface === 'monitor') return 'system audio' + rate;
+    if (surface === 'window')  return (name ? `window · ${name}` : 'window') + rate;
+    return (name || 'app audio') + rate;
   }
 
   async function stop() {

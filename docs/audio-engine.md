@@ -430,7 +430,13 @@ What works where (the picker decides; a stream with no audio track throws a
 | Chrome / Edge, Linux | yes | no (use a PulseAudio/PipeWire monitor as the mic) |
 | Firefox, Safari, any mobile browser | no | no |
 
-So the universal route is the Spotify **web player in another tab**. For a native
+So the universal route is the Spotify **web player in another tab**. On macOS,
+*window* / *entire screen* audio (the Spotify desktop app) has been seen arriving
+pitched down and garbled with the tempo intact: the signature of a stream whose
+real rate is higher than the format it reports, with the excess blocks dropped.
+That is upstream of qualia and can't be repaired afterwards, so for grabs on a Mac
+use a tab (or a loopback device). The capture label shows the track's reported
+rate (e.g. `tab · … · 48k`) to help spot this. For a native
 app where the picker offers no system audio, a loopback device (BlackHole /
 Loopback on macOS, VB-Cable on Windows, a Pulse/PipeWire monitor on Linux)
 selected as the ordinary mic input does the same job. The Spotify Web API can't
