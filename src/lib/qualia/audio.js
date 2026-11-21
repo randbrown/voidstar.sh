@@ -440,7 +440,25 @@ export function createAudio() {
     recMixTaps.delete(id);
   }
 
-  function getRecordableStream() {
+  // Close the mix bus once nothing needs it. Built lazily for a take, it used
+  // to stay up for the rest of the page: an extra AudioContext (its own
+  // CoreAudio output stream + render thread) plus a cross-context MediaStream
+  // bridge per source, all still running hours after the last recording. The
+  // recorder calls this when a take ends (its cloned tracks are already
+  // stopped); the next take rebuilds the bus via resumeRecordableMix(). A
+  // pinned bus (the playback-sync A/V follower streams it continuously) stays.
+  let recMixPinned = false;
+  function releaseRecordableMix() {
+    if (!recMixCtx || recMixPinned) return;
+    for (const id of Array.from(recMixTaps.keys())) detachFromRecordableMix(id);
+    const ctx = recMixCtx;
+    recMixCtx = null;
+    recMixDest = null;
+    try { ctx.close(); } catch {}
+  }
+
+  function getRecordableStream({ pin = false } = {}) {
+    if (pin) recMixPinned = true;
     // Always materialise the mix bus, even if no sources are live yet.
     // The recorder attaches the mix track up front; sources that come
     // online mid-recording (user enables mic, hits play on strudel, etc)
@@ -915,6 +933,7 @@ export function createAudio() {
     getCurrentMicId: () => micId,
     getMicStream:    () => sources.get('mic')?.stream ?? null,
     getRecordableStream,
+    releaseRecordableMix,
     getStemStream,
     getStemNode,
     releaseStem,
