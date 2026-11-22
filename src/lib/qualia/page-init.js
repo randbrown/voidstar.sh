@@ -37,6 +37,7 @@ import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
 import { createAppCapture } from './app-capture.js';
 import { createStreamRing } from './stream-ring.js';
+import { createPerfHealth } from './perf-health.js';
 import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
 import { makeDraggablePanel, resetAllPanelPositions } from './panel-pos.js';
@@ -5467,7 +5468,10 @@ export function initQualiaPage() {
     getAutoSave:         () => recOverride?.autoSave ?? autoSaveRec,
     resumeAudio:         () => audio.resumeRecordableMix?.(),
     onCaptureStart:      recordCompositeBegin,
-    onCaptureEnd:        recordCompositeEnd,
+    // Take over: drop the recordable mix bus too (audio.js rebuilds it for
+    // the next take) so a recording mid-set doesn't leave an extra audio
+    // context + per-source bridges running for the rest of the show.
+    onCaptureEnd:        () => { recordCompositeEnd(); audio.releaseRecordableMix?.(); },
     onStateChange: ({ recording, backend, sink }) => {
       if (btnRecord) {
         btnRecord.classList.toggle('active-audio', recording);
@@ -9449,6 +9453,21 @@ export function initQualiaPage() {
   const diagHatEl    = document.getElementById('diag-hat');
   const diagPosesEl  = document.getElementById('diag-poses');
   const diagCard     = document.getElementById('diag-card');
+  // Session health rows (heap / dom / jank / audio contexts / glitches) —
+  // sampled 1×/s only while the card is open. Strudel's context isn't under
+  // the unlock watch, so hand it in.
+  createPerfHealth({
+    isOpen: () => !!diagCard && !diagCard.classList.contains('collapsed'),
+    els: {
+      heap:   document.getElementById('diag-heap'),
+      dom:    document.getElementById('diag-dom'),
+      jank:   document.getElementById('diag-jank'),
+      audio:  document.getElementById('diag-audio'),
+      glitch: document.getElementById('diag-glitch'),
+    },
+    // Only once Strudel is tapped — getAudioContext() lazily CREATES its context.
+    extraContexts: () => { try { return audio.hasSource('strudel') ? [globalThis.getAudioContext?.()] : []; } catch { return []; } },
+  });
   const beatTimes = [], snareTimes = [], hatTimes = [];
   function pruneOlderThan(arr, cutoff) {
     while (arr.length && arr[0] < cutoff) arr.shift();
@@ -9459,6 +9478,12 @@ export function initQualiaPage() {
   core.onTick((field) => {
     const a = field.audio;
     const now = performance.now();
+    // Prune here, not only when the diag card is open: collapsed (the default)
+    // these three arrays used to grow by every kick/snare/hat for the whole set.
+    if (beatTimes.length + snareTimes.length + hatTimes.length > 96) {
+      const cutoff = now - 5000;
+      pruneOlderThan(beatTimes, cutoff); pruneOlderThan(snareTimes, cutoff); pruneOlderThan(hatTimes, cutoff);
+    }
     if (a.beat.pulse  > 0.95 && prevBeat  < 0.95) beatTimes.push(now);
     if (a.mids.pulse  > 0.95 && prevSnare < 0.95) snareTimes.push(now);
     if (a.highs.pulse > 0.95 && prevHat   < 0.95) hatTimes.push(now);
@@ -9645,7 +9670,7 @@ export function initQualiaPage() {
         av: {
           getCanvas:      () => core.getCanvas?.(),
           onCanvas:       (fn) => core.onCanvas?.(fn),
-          getMixStream:   () => audio.getRecordableStream?.(),
+          getMixStream:   () => audio.getRecordableStream?.({ pin: true }),
           resumeMix:      () => audio.resumeRecordableMix?.(),
           adoptAnalyser:  (ctx, an) => audio.adoptAnalyser?.(ctx, an, 'remote'),
           releaseAdopted: () => audio.releaseAdopted?.('remote'),

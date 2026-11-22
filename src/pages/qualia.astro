@@ -1072,6 +1072,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .diag-row { gap: 0.6rem; }
     .diag-row .diag-label { color: var(--text); }
     .diag-row .qp-val     { font-variant-numeric: tabular-nums; }
+    .diag-row .qp-val.warn { color: var(--danger, #f472b6); }
     /* Build-stamp header at the top of the diag body. Selectable so the
        user can copy the sha into a bug report. Tooltip carries the full
        commit ISO + build ISO for cache-debugging. */
@@ -3656,6 +3657,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row diag-row"><span class="diag-label">snare / 5s</span><span class="qp-val" id="diag-snare">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">hat / 5s</span><span class="qp-val" id="diag-hat">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">poses</span><span class="qp-val" id="diag-poses">0</span></div>
+      <div class="qp-section-tag" title="Session health — watch these over a set. A heap or dom count that keeps climbing, or jank that grows, is the slowdown. Audio lists the live audio contexts, their sample rates and the worst output latency; two different rates means Chrome is resampling — set the interface and macOS to one rate.">health</div>
+      <div class="qp-row diag-row" title="JS heap in use, and the change since you opened this card. Should level off; a steady climb over a set is a leak."><span class="diag-label">heap</span><span class="qp-val" id="diag-heap">—</span></div>
+      <div class="qp-row diag-row" title="Page element count. Should stay flat."><span class="diag-label">dom</span><span class="qp-val" id="diag-dom">—</span></div>
+      <div class="qp-row diag-row" title="Main-thread time lost to long tasks (over 50 ms) in the last 10 s — the mouse-lag / Strudel-stutter number."><span class="diag-label">jank</span><span class="qp-val" id="diag-jank">—</span></div>
+      <div class="qp-row diag-row" title="Live audio contexts · sample rates · worst output latency. Highlighted when contexts run at different rates (Chrome resamples them to the interface)."><span class="diag-label">audio</span><span class="qp-val" id="diag-audio">—</span></div>
+      <div class="qp-row diag-row" title="Audio render underruns reported by Chrome (only on builds that expose AudioContext playback stats)."><span class="diag-label">glitches</span><span class="qp-val" id="diag-glitch">—</span></div>
       <div class="qp-row" data-qp="viz-fps" title="Cap the visualizer frame rate. 'max' = uncapped. Lower frees the main thread (helps Strudel timing + UI on Windows) and doubles as a slow-motion / strobe aesthetic down to 1fps. Audio reactivity is unaffected.">
         <label>render cap<span class="qp-val">max</span></label>
         <input type="range" min="1" max="61" step="1" value="61">

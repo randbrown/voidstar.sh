@@ -100,14 +100,19 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
     playhead no longer skips cells at faster tempos. The HUD/chron/diag stay on `onFps`.
 11. **`mp4-timecode.addTimecodeTrack` full second copy** of a multi-GB file via `concat` — pass
     subarray views to `new Blob([...])`. (Auto-save already skips this pass.)
-12. **`recMixCtx` (recordable-mix AudioContext) is never closed** — persistent extra audio graph
-    after the first recording; notable on mobile. Close on recorder teardown.
+12. ✅ **`recMixCtx` (recordable-mix AudioContext) is never closed** — *done:* the composite
+    recorder's `onCaptureEnd` calls `audio.releaseRecordableMix()` (detach taps, close the ctx);
+    the next take rebuilds it. The sync A/V follower pins the bus (`getRecordableStream({pin})`).
+    Tab-capture takes don't fire `onCaptureEnd`, so their bus still lingers.
 13. **Pose:** downscale the source before `createImageBitmap` (landmarks don't need 1920px) to cut
     copy + inference cost, especially on phones.
 14. **Looper record** keeps every 128-frame quantum as a separate array then concatenates — pre-grow
     a single buffer (the live-view ring already does this).
 15. **Overlay sparks** loop iterates the full 2,400-slot ring every frame regardless of live count —
     track a live-count cursor.
+16. **Session health readout** — the diag card's *health* rows (`perf-health.js`: heap Δ, DOM
+    count, long-task jank / 10 s, live AudioContexts · rates · output latency, underruns where
+    Chrome exposes `playbackStats`) are the first stop for a "gets slower over a set" report.
 
 ## D. Correctness / robustness
 

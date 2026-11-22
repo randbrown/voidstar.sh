@@ -98,6 +98,10 @@ export function registerContext(ctx) {
   return ctx;
 }
 
+/** Every context under the unlock watch (closed ones drop out) — read by the
+ *  diag card's audio-health row (perf-health.js). */
+export function listContexts() { return Array.from(contexts); }
+
 export function unregisterContext(ctx) {
   if (ctx) contexts.delete(ctx);
 }

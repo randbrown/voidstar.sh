@@ -159,7 +159,12 @@ class LookaheadLimiterCore {
       if (D > 0 && ++dlPos === D) dlPos = 0;
     }
 
-    Object.assign(this, { dlPos, qHead, qLen, n, b1Pos, b1Sum, b2Pos, b2Sum, rel, minGain });
+    // Plain field stores — an Object.assign({...}) here allocated a fresh
+    // object every 128-frame quantum on the audio thread (≈375/s per limiter,
+    // one limiter per bus), i.e. steady garbage for the render thread's GC.
+    this.dlPos = dlPos; this.qHead = qHead; this.qLen = qLen; this.n = n;
+    this.b1Pos = b1Pos; this.b1Sum = b1Sum; this.b2Pos = b2Pos; this.b2Sum = b2Sum;
+    this.rel = rel; this.minGain = minGain;
   }
 }
 
