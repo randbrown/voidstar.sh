@@ -25,7 +25,7 @@ import {
 } from './sequencer-kits.js';
 import { createSampleKit } from './sequencer-voices.js';
 import {
-  parsePackSpec, DEFAULT_COLLECTION_ID, getCollection, setActiveCollectionId,
+  parsePackSpec, DEFAULT_COLLECTION_ID, getCollection, setActiveCollectionId, onActiveCollectionChange,
 } from './samples-manifest.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
@@ -110,6 +110,8 @@ function saveSeqCollection(id) { setRaw(SEQ_COLLECTION_KEY, id); }
 // Apply the persisted collection to the manifest module as early as module load,
 // so the first kit build + Strudel registration both see the right collection.
 setActiveCollectionId(loadSeqCollection());
+// Persist every change, whoever makes it (source picker or kit.use() in code).
+onActiveCollectionChange(saveSeqCollection);
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -599,7 +601,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   function setSource(source) {
     if (isExternalKit(source)) { setKit(source); return; }
     _lastBundledSource = source;
-    if (source !== 'synth') { setActiveCollectionId(source); saveSeqCollection(source); }
+    if (source !== 'synth') setActiveCollectionId(source);   // listener persists it
     setKit(kitIdFor(currentGS().genre || DEFAULT_GENRE, source));
   }
   // Mute is per-session, not persisted in the pattern model — it's a

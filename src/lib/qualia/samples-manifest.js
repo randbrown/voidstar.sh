@@ -39,7 +39,7 @@ export const GENRE_DESCS = {
 
 // ── Collections ─────────────────────────────────────────────────────────────
 // A *collection* is a full bundled bank: one pack per genre, all swapped at once.
-// We ship two so the same groove can be A/B'd between sound sets:
+// We ship three so the same groove can be A/B'd between sound sets:
 //   - signature  → the characterful default (scripts/gen-samples.mjs), embedded
 //                  as data: URLs in each public/samples/signature/<genre>/strudel.json
 //   - voidstar_0 → the ORIGINAL synthetic packs, the neutral baseline
@@ -68,13 +68,27 @@ export function getCollection(id) {
 
 // Active collection — the one the sequencer's "<genre> · samples" kits and the
 // idiomatic Strudel `.bank("<genre>")` resolve to. In-memory here; the sequencer
-// owns persistence (localStorage) and calls setActiveCollectionId on boot/change,
-// and strudel-hydra reads it once at registration to pick the plain-bank set.
+// owns persistence (localStorage) and calls setActiveCollectionId on boot/change;
+// kit.use('<bank|id>') sets it from code. strudel-hydra re-binds the plain-bank
+// set whenever it changes, so no reload is needed.
 let _activeCollectionId = DEFAULT_COLLECTION_ID;
+const _activeListeners = new Set();
 export function getActiveCollectionId() { return _activeCollectionId; }
 export function setActiveCollectionId(id) {
-  if (COLLECTION_BY_ID[id]) _activeCollectionId = id;
+  if (COLLECTION_BY_ID[id] && id !== _activeCollectionId) {
+    _activeCollectionId = id;
+    for (const fn of _activeListeners) {
+      try { fn(id); } catch (e) { console.warn('[qualia] active-collection listener failed:', e); }
+    }
+  }
   return _activeCollectionId;
+}
+// Subscribe to active-collection changes (Strudel re-binds the plain genre
+// banks, the sequencer persists the choice, the sounds tab re-labels).
+// Returns an unsubscribe function.
+export function onActiveCollectionChange(fn) {
+  _activeListeners.add(fn);
+  return () => _activeListeners.delete(fn);
 }
 
 // Root-relative manifest URL for one genre within a collection.
