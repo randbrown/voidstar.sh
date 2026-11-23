@@ -238,7 +238,7 @@ The overlay composites these on top of every fx. Don't render them in your fx:
 - **Aura** (centroid halo, bass-driven)
 - **Ripples** (beat-driven concentric rings)
 - **Crawler** (the procedural spider that walks over the active quale — `crawler.js`)
-- **ASCII post-process**
+- **ASCII post-process** (mono, or per-character colour from your pixels / the theme's hue arc — `qualia.ascii({ color })`)
 
 If you want pose-driven *content* in your fx (e.g., singularity_lens uses head as the lensing centre), read `field.pose.people` directly — the overlay's rendering is independent of any fx using pose data internally.
 

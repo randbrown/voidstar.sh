@@ -382,6 +382,10 @@ export function installCodeApi(deps) {
     },
     mosh:   gsConfig(() => overlay.getMoshConfig(),   (c) => overlay.setMoshConfig(c)),
     edge:   gsConfig(() => overlay.getEdgeConfig(),   (c) => overlay.setEdgeConfig(c)),
+    /** ascii() reads; ascii({color, vivid, cell}) patches. color: 'mono' |
+     *  'color' (each character in its pixels' colour) | 'theme' (theme hue
+     *  arc by brightness). On/off is glitch('ascii', mode). */
+    ascii:  gsConfig(() => overlay.getAsciiConfig(),  (c) => page.patchAsciiConfig?.(c)),
     /** crawler() reads the spider layer's tunables; crawler({follow, size, …}) patches
      *  them. On/off is overlay('crawler', on) like the other layers. */
     crawler: gsConfig(() => overlay.getCrawlerConfig(), (c) => overlay.setCrawlerConfig(c)),

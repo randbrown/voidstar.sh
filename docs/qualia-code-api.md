@@ -403,6 +403,9 @@ qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|p
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip
 qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch / qualia.voxel
+qualia.ascii({ color: 'color' })   // ascii: color mono|color|theme (per-character colour from
+                                   // the fx pixels / the theme's hue arc), vivid 0..1 (lift
+                                   // dim colours, color mode), cell (character height px)
 qualia.voxel({ depth: 2, tilt: .6 }) // voxel: cellSize, depth, cutoff, gap, smooth, tilt, orbit,
                                    // speed, zoom, react, fog
 qualia.logo(true); qualia.logoConfig({ caption: "voidstar" })

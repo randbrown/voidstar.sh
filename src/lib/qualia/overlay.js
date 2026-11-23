@@ -362,6 +362,30 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
   function getEdgeConfig() { return { ...edgeConfig }; }
 
+  // ASCII post-process tunables. `color` picks how each character is tinted:
+  // 'mono' (one theme tint, the original look), 'color' (each character
+  // takes the colour of the fx pixels under it), 'theme' (each character is
+  // coloured by its brightness along the theme's hue arc). `vivid` lifts dim
+  // colours toward full brightness while keeping their hue, so a mid-grey
+  // cell's '+' stays readable; `cell` is the character height in px.
+  const ASCII_COLOR_MODES = ['mono', 'color', 'theme'];
+  const asciiConfig = {
+    color: 'mono',
+    vivid: 0.6,
+    cell:  14,
+  };
+  function setAsciiConfig(partial) {
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (k === 'color') {
+        if (ASCII_COLOR_MODES.includes(v)) asciiConfig.color = v;
+      } else if (k in asciiConfig && typeof v === 'number' && Number.isFinite(v)) {
+        asciiConfig[k] = k === 'cell' ? Math.max(6, Math.min(48, v))
+                       : Math.max(0, Math.min(1, v));
+      }
+    }
+  }
+  function getAsciiConfig() { return { ...asciiConfig }; }
+
   // Crawler tunables (see crawler.js CRAWLER_DEFAULTS for what each does).
   // follow/palette are enums, legs is 6|8, silk boolean, the rest numeric.
   const crawlerConfig = { ...CRAWLER_DEFAULTS };
@@ -978,21 +1002,70 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // works for both) into a small offscreen, then blits luminance-mapped
   // characters onto the overlay. When ASCII is on, the overlay paints an
   // opaque background first to fully cover the viz beneath.
-  const ASCII_RAMP    = ' .,:-=+*#%@';
-  const ASCII_CELL_PX = 14;
-  let asciiCols = 0, asciiRows = 0;
+  //
+  // Colour modes keep the same one-fillText-per-row cost: the rows are drawn
+  // in white onto a full-res mask, then the low-res colour grid (one pixel
+  // per character) is stretched over it with 'source-in', so every glyph
+  // takes its cell's colour in two GPU blits instead of a fillText per cell.
+  const ASCII_RAMP = ' .,:-=+*#%@';
+  let asciiCols = 0, asciiRows = 0, asciiCellPx = 0;
   let asciiSrc = null, asciiSrcCtx = null;
+  // Colour-mode buffers, allocated on first colour frame only.
+  let asciiTint = null, asciiTintCtx = null, asciiTintImg = null;
+  let asciiMask = null, asciiMaskCtx = null;
+  const asciiThemeLut = new Uint8ClampedArray(32 * 3);
+  let asciiLutKnobs = null;
 
   function updateAsciiGrid() {
     const W = canvas.width, H = canvas.height;
-    asciiCols = Math.max(20, Math.floor(W / (ASCII_CELL_PX * 0.6)));
-    asciiRows = Math.max(10, Math.floor(H / ASCII_CELL_PX));
+    asciiCellPx = asciiConfig.cell;
+    asciiCols = Math.max(20, Math.floor(W / (asciiCellPx * 0.6)));
+    asciiRows = Math.max(10, Math.floor(H / asciiCellPx));
     if (!asciiSrc) {
       asciiSrc = document.createElement('canvas');
       asciiSrcCtx = asciiSrc.getContext('2d', { willReadFrequently: true });
     }
     asciiSrc.width  = asciiCols;
     asciiSrc.height = asciiRows;
+    asciiTintImg = null;   // re-sized lazily by ensureAsciiColorBuffers
+  }
+
+  function ensureAsciiColorBuffers(W, H) {
+    if (!asciiTint) {
+      asciiTint = document.createElement('canvas');
+      asciiTintCtx = asciiTint.getContext('2d');
+      asciiMask = document.createElement('canvas');
+      asciiMaskCtx = asciiMask.getContext('2d');
+    }
+    if (!asciiTintImg || asciiTint.width !== asciiCols || asciiTint.height !== asciiRows) {
+      asciiTint.width = asciiCols;
+      asciiTint.height = asciiRows;
+      asciiTintImg = asciiTintCtx.createImageData(asciiCols, asciiRows);
+    }
+    if (asciiMask.width !== W || asciiMask.height !== H) {
+      asciiMask.width = W;
+      asciiMask.height = H;
+    }
+  }
+
+  // 32 brightness steps along the theme's hue arc (rebuilt on theme change).
+  function hslByte(h, s, l, n) {
+    const k = (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    return 255 * (l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1))));
+  }
+  function refreshAsciiThemeLut() {
+    if (asciiLutKnobs === K) return;
+    asciiLutKnobs = K;
+    const s = K.sat / 100;
+    for (let i = 0; i < 32; i++) {
+      const t = i / 31;
+      const h = ((K.hue(t) % 360) + 360) % 360;
+      const l = Math.min(0.85, (K.light + 12) / 100);
+      asciiThemeLut[i * 3]     = hslByte(h, s, l, 0);
+      asciiThemeLut[i * 3 + 1] = hslByte(h, s, l, 8);
+      asciiThemeLut[i * 3 + 2] = hslByte(h, s, l, 4);
+    }
   }
 
   function renderAscii() {
@@ -1001,7 +1074,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const main = getMainCanvas?.();
     if (!main) return;
     const W = canvas.width, H = canvas.height;
-    if (asciiSrc.width !== asciiCols || asciiSrc.height !== asciiRows) updateAsciiGrid();
+    if (asciiCellPx !== asciiConfig.cell || asciiSrc.width !== asciiCols || asciiSrc.height !== asciiRows) updateAsciiGrid();
     asciiSrcCtx.globalCompositeOperation = 'copy';
     try {
       asciiSrcCtx.drawImage(main, 0, 0, asciiCols, asciiRows);
@@ -1016,12 +1089,29 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     ctx.fillStyle = K.bg;
     ctx.fillRect(0, 0, W, H);
 
+    const mode = asciiConfig.color;
+    const colored = mode !== 'mono';
+    let tint = null;
+    if (colored) {
+      ensureAsciiColorBuffers(W, H);
+      tint = asciiTintImg.data;
+      if (mode === 'theme') refreshAsciiThemeLut();
+    }
+    const vivid = asciiConfig.vivid;
+
     const cellW    = W / asciiCols;
     const cellH    = H / asciiRows;
     const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
-    ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
-    ctx.textBaseline = 'top';
-    ctx.fillStyle    = K.color(0.4, { light: 75, alpha: 0.92 });
+    const tctx = colored ? asciiMaskCtx : ctx;
+    if (colored) tctx.clearRect(0, 0, W, H);
+    tctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
+    tctx.textBaseline = 'top';
+    tctx.fillStyle    = colored ? '#fff' : K.color(0.4, { light: 75, alpha: 0.92 });
+    // Pin each row to exactly W so character c sits over colour cell c (the
+    // font's advance is only approximately cellW, which drifts across a row).
+    const advance = tctx.measureText('M').width || cellW;
+    const sx = cellW / advance;
+    tctx.setTransform(sx, 0, 0, 1, 0, 0);
 
     const N = ASCII_RAMP.length - 1;
     const gamma = 0.85;
@@ -1029,13 +1119,37 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       let row = '';
       for (let c = 0; c < asciiCols; c++) {
         const i   = (r * asciiCols + c) * 4;
-        const lum = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+        const R = data[i], G = data[i + 1], B = data[i + 2];
+        const lum = (0.299 * R + 0.587 * G + 0.114 * B) / 255;
         const ramp = Math.pow(lum, gamma);
         let idx = (ramp * (N + 1)) | 0;
         if (idx > N) idx = N;
         row += ASCII_RAMP[idx];
+        if (tint) {
+          if (mode === 'color') {
+            // Lift toward full value, hue kept: scale so the max channel
+            // reaches 255, blended by `vivid`.
+            const mx = Math.max(R, G, B, 1);
+            const k = 1 + (255 / mx - 1) * vivid;
+            tint[i] = R * k; tint[i + 1] = G * k; tint[i + 2] = B * k;
+          } else {
+            const j = Math.min(31, (ramp * 32) | 0) * 3;
+            tint[i] = asciiThemeLut[j]; tint[i + 1] = asciiThemeLut[j + 1]; tint[i + 2] = asciiThemeLut[j + 2];
+          }
+          tint[i + 3] = 235;
+        }
       }
-      ctx.fillText(row, 0, r * cellH);
+      tctx.fillText(row, 0, r * cellH);
+    }
+    tctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    if (colored) {
+      asciiTintCtx.putImageData(asciiTintImg, 0, 0);
+      asciiMaskCtx.globalCompositeOperation = 'source-in';
+      asciiMaskCtx.imageSmoothingEnabled = false;
+      asciiMaskCtx.drawImage(asciiTint, 0, 0, W, H);
+      asciiMaskCtx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(asciiMask, 0, 0);
     }
   }
 
@@ -1721,6 +1835,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     getMoshConfig,
     setEdgeConfig,
     getEdgeConfig,
+    setAsciiConfig,
+    getAsciiConfig,
     setStitchConfig,
     getStitchConfig,
     setVoxelConfig,

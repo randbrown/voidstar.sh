@@ -573,6 +573,7 @@ export function initQualiaPage() {
     glitchModes:    { ...glitchModes },
     moshConfig:     overlay.getMoshConfig(),
     edgeConfig:     overlay.getEdgeConfig(),
+    asciiConfig:    overlay.getAsciiConfig(),
     stitchConfig:   overlay.getStitchConfig(),
     voxelConfig:    overlay.getVoxelConfig(),
     camWalkOn,
@@ -610,6 +611,7 @@ export function initQualiaPage() {
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+    asciiCollapsed: document.getElementById('ascii-card')?.classList.contains('collapsed') ?? true,
     crawlerCollapsed: document.getElementById('crawler-card')?.classList.contains('collapsed') ?? true,
     stitchCollapsed: document.getElementById('stitch-card')?.classList.contains('collapsed') ?? true,
     voxelCollapsed: document.getElementById('voxel-card')?.classList.contains('collapsed') ?? true,
@@ -762,6 +764,7 @@ export function initQualiaPage() {
   // derived from glitchModes above).
   if (stored.moshConfig) overlay.setMoshConfig(stored.moshConfig);
   if (stored.edgeConfig) overlay.setEdgeConfig(stored.edgeConfig);
+  if (stored.asciiConfig) overlay.setAsciiConfig(stored.asciiConfig);
   if (stored.stitchConfig) overlay.setStitchConfig(stored.stitchConfig);
   if (stored.voxelConfig) overlay.setVoxelConfig(stored.voxelConfig);
 
@@ -3417,6 +3420,7 @@ export function initQualiaPage() {
   // below, because syncPostBtns toggles their visibility.
   const moshCard = document.getElementById('mosh-card');
   const edgeCard = document.getElementById('edge-card');
+  const asciiCard = document.getElementById('ascii-card');
   const stitchCard = document.getElementById('stitch-card');
   const voxelCard  = document.getElementById('voxel-card');
 
@@ -3574,6 +3578,7 @@ export function initQualiaPage() {
     for (const g of GLITCH_KEYS) refreshGlitchBtn(g);
     if (moshCard) moshCard.style.display = glitchModes.mosh !== 'off' ? '' : 'none';
     if (edgeCard) edgeCard.style.display = glitchModes.edge !== 'off' ? '' : 'none';
+    if (asciiCard) asciiCard.style.display = glitchModes.ascii !== 'off' ? '' : 'none';
     if (stitchCard) stitchCard.style.display = glitchModes.stitch !== 'off' ? '' : 'none';
     if (voxelCard)  voxelCard.style.display  = glitchModes.voxel  !== 'off' ? '' : 'none';
   }
@@ -3635,6 +3640,54 @@ export function initQualiaPage() {
   wireEdgeSlider('edge-glow',      'glow');
   if (edgeCard && typeof stored.edgeCollapsed === 'boolean') {
     edgeCard.classList.toggle('collapsed', stored.edgeCollapsed);
+  }
+
+  // ASCII card — colour-mode chips + vivid / cell sliders. syncAsciiCard
+  // repaints it from the overlay (after a qualem recall or a code-API write).
+  const asciiCardSyncFns = [];
+  function syncAsciiCard() { for (const fn of asciiCardSyncFns) fn(); }
+  function wireAsciiSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const paint = () => {
+      const v = overlay.getAsciiConfig()[key];
+      input.value = String(v);
+      val.textContent = fmt(v);
+    };
+    paint();
+    asciiCardSyncFns.push(paint);
+    input.addEventListener('input', () => {
+      overlay.setAsciiConfig({ [key]: parseFloat(input.value) });
+      paint();
+      settings.save();
+    });
+  }
+  wireAsciiSlider('ascii-vivid', 'vivid');
+  wireAsciiSlider('ascii-cell',  'cell', (v) => `${Math.round(v)}px`);
+  {
+    const chips = [...document.querySelectorAll('#ascii-card [data-ascii-color]')];
+    const paint = () => {
+      const cur = overlay.getAsciiConfig().color;
+      for (const b of chips) b.classList.toggle('active', b.dataset.asciiColor === cur);
+      // vivid only means something for true-colour mode.
+      const vividRow = document.querySelector('[data-qp="ascii-vivid"]');
+      if (vividRow) vividRow.style.display = cur === 'color' ? '' : 'none';
+    };
+    paint();
+    asciiCardSyncFns.push(paint);
+    for (const b of chips) {
+      b.addEventListener('click', () => {
+        overlay.setAsciiConfig({ color: b.dataset.asciiColor });
+        paint();
+        settings.save();
+        echo.log(`qualia.ascii({ color: '${b.dataset.asciiColor}' })`);
+      });
+    }
+  }
+  if (asciiCard && typeof stored.asciiCollapsed === 'boolean') {
+    asciiCard.classList.toggle('collapsed', stored.asciiCollapsed);
   }
 
   // Stitch wiring — sliders like mosh/edge, plus a palette cycler button
@@ -7778,6 +7831,7 @@ export function initQualiaPage() {
         crawlerConfig: overlay.getCrawlerConfig(),
         mosh:       overlay.getMoshConfig(),
         edge:       overlay.getEdgeConfig(),
+        ascii:      overlay.getAsciiConfig(),
         stitch:     overlay.getStitchConfig(),
         voxel:      overlay.getVoxelConfig(),
       },
@@ -7807,6 +7861,7 @@ export function initQualiaPage() {
         params: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
         mosh:   document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
         edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+        ascii:  document.getElementById('ascii-card')?.classList.contains('collapsed') ?? true,
         stitch: document.getElementById('stitch-card')?.classList.contains('collapsed') ?? true,
         voxel:  document.getElementById('voxel-card')?.classList.contains('collapsed') ?? true,
         walk:   document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
@@ -7936,6 +7991,7 @@ export function initQualiaPage() {
       }
       if (q.overlay.mosh) overlay.setMoshConfig(q.overlay.mosh);
       if (q.overlay.edge) overlay.setEdgeConfig(q.overlay.edge);
+      if (q.overlay.ascii) { overlay.setAsciiConfig(q.overlay.ascii); syncAsciiCard(); }
       if (q.overlay.crawlerConfig) overlay.setCrawlerConfig(q.overlay.crawlerConfig);
       if (q.overlay.stitch) {
         overlay.setStitchConfig(q.overlay.stitch);
@@ -8052,7 +8108,7 @@ export function initQualiaPage() {
     if (q.cards) {
       const cardMap = {
         audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
-        params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
+        params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card', ascii: 'ascii-card',
         stitch: 'stitch-card', voxel: 'voxel-card',
         walk: 'walk-card', logo: 'logo-card', camera: 'camera-card',
         qualem: 'qualem-card', chron: 'chron-card',
@@ -9130,6 +9186,8 @@ export function initQualiaPage() {
       setHornsOn,
       getHornsOn: () => hornsOn,
       getHornsConfig: () => ({ ...hornsConfig }),
+      // ASCII tunables via the page so the card repaints and settings persist.
+      patchAsciiConfig: (c) => { overlay.setAsciiConfig(c); syncAsciiCard(); settings.save(); },
       patchHornsConfig: (c) => {
         if (c && typeof c === 'object') { Object.assign(hornsConfig, c); settings.save(); }
       },

@@ -145,7 +145,9 @@ lost-context bug. WebGL2 contexts are created with `preserveDrawingBuffer: true`
 post-FX (ASCII/mosh/edge/stitch) can read pixels back from any fx.
 
 **Overlay post passes** (`overlay.js` + `post-mosh.js` / `post-stitch.js` / `post-voxel.js`): mutually-exclusive
-full-frame glitches over the active fx — ASCII, data-mosh, edge-detect, stitch, voxel, negative. Data-mosh is a real
+full-frame glitches over the active fx — ASCII, data-mosh, edge-detect, stitch, voxel, negative. ASCII draws one
+fillText per row; its colour modes tint a white glyph mask with the downsampled frame (`source-in`) rather than
+drawing per cell. Data-mosh is a real
 motion-vector melt (WebGL2, offscreen ≤960px sim): per-macroblock motion estimation between
 consecutive frames advects a persistent buffer (I-frame-removal emulation), still regions heal,
 a `cycle` timer lands periodic clean keyframes, beats fire block-teleport bursts + rainbow residue;
