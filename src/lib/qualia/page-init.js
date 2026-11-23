@@ -3403,8 +3403,12 @@ export function initQualiaPage() {
   });
 
   // ── Overlay toggles (skeleton / sparks / aura / ripples / ASCII) ─────────
+  // Layer buttons by option key, so code-driven writes (qualia.overlay, code
+  // mode) can repaint the right one — see setOverlay below.
+  const overlayBtns = {};
   function wireOverlayToggle(btn, key) {
     if (!btn) return;
+    overlayBtns[key] = btn;
     btn.classList.toggle('active', overlay.getOption(key));
     btn.addEventListener('click', () => {
       const v = !overlay.getOption(key);
@@ -3431,6 +3435,12 @@ export function initQualiaPage() {
   wireOverlayToggle(btnHands,   'hands');
   wireOverlayToggle(btnRipples, 'ripples');
   wireOverlayToggle(btnCrawler, 'crawler');
+  /** Code-side layer write: same as a click (button repaint + persist). */
+  function setOverlay(key, on) {
+    overlay.setOption(key, !!on);
+    overlayBtns[key]?.classList.toggle('active', !!overlay.getOption(key));
+    settings.save();
+  }
 
   // ── Crawler card — tunables for the procedural spider layer ─────────────
   // Same show-while-on + slider/select/toggle pattern as the logo card; the
@@ -9105,7 +9115,7 @@ export function initQualiaPage() {
   installCodeApi({
     core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem, filePlayer,
     pose, overlay, camWalk, logoMark, fader,
-    echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled },
+    echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled, burst: (lines) => echo.burst(lines) },
     page: {
       applySceneChange: (fn) => quantizedSceneChange(() => { runSceneTransition(); fn(); }),
       qualeStep,
@@ -9181,6 +9191,10 @@ export function initQualiaPage() {
       setFullscreen,
       setCamWalkOn,
       setLogoOn,
+      setOverlay,
+      // The user's layer state — nightcall reads through a horns flash.
+      getOverlay: (key) => (key === 'nightcall' ? nightcallUserOn() : overlay.getOption(key)),
+      onCodeMode: (on) => refreshCodeBtn(on),
       // Metal horns 🤘 — detection toggle + reaction config (see the horns
       // block above; same paths as the pose-menu button).
       setHornsOn,
@@ -9258,6 +9272,18 @@ export function initQualiaPage() {
       getEntangle: () => entangleEngine,
     },
   });
+
+  // Live-coding mode (code-mode.js via qualia.code): the topbar "code" button
+  // and ⇧L both go through the api, so the echo strip shows the calls.
+  const btnCode = document.getElementById('btn-code');
+  function refreshCodeBtn(on = !!globalThis.qualia?.code?.()) {
+    if (!btnCode) return;
+    btnCode.classList.toggle('active', on);
+    btnCode.setAttribute('aria-pressed', String(on));
+  }
+  const toggleCodeMode = () => globalThis.qualia?.code?.(!globalThis.qualia.code());
+  btnCode?.addEventListener('click', toggleCodeMode);
+  refreshCodeBtn();
   // DOIO 16-key grid (row-major) + the 3 knob-pushes + blackout, as MIDI note
   // numbers. Reflash the pad to send these Note-On numbers (see the keymap
   // doc). Knob *turns* stay on CC1/CC2/CC7 (absolute 0–1) in the CC handler.
@@ -9350,7 +9376,7 @@ export function initQualiaPage() {
       case 'u': btnWalk?.click(); break;   // cam walk on/off
       // Phase/cycle are on/off toggles (the dwell keeps its own picker), so
       // L/N flip the auto mode without touching the remembered period.
-      case 'l': togglePhaseAuto(); break;
+      case 'l': if (e.shiftKey) toggleCodeMode(); else togglePhaseAuto(); break;   // phase auto / ⇧ live coding mode
       case 'n': {
         // Shift+N cycles the negative post (N alone toggles the auto-cycle —
         // every single letter is already a pad key, so the post rides the

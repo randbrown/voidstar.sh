@@ -324,6 +324,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       max-width: 92vw;
     }
     .api-echo-line:not(:last-child) { opacity: 0.45; font-size: 0.66rem; }
+    /* A burst (live-coding mode's enter/exit) is one block of calls: keep
+       every line readable instead of dimming all but the newest. */
+    #api-echo.burst .api-echo-line { opacity: 1; font-size: 0.72rem; }
+    #api-echo.burst .api-echo-line.note { color: var(--muted); }
     .api-echo-line:hover { border-color: var(--border); }
     .api-echo-line.copied { color: var(--pink); }
 
@@ -3347,6 +3351,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div id="topbar-corner">
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
+      <button class="ctrl-btn" id="btn-code" title="Live coding mode (⇧L) — snapshot the scene, then switch off auto-cycle/phase, post fx, layers, cam walk + logo and blank to the null quale. Tap again to restore. Same as qualia.code(true)." aria-pressed="false">code</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
@@ -3613,6 +3618,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="hints" title="Full key + knob map — click or press ?">
   <span><kbd>V</kbd> next fx</span>
   <span><kbd>L</kbd> phase</span>
+  <span><kbd>⇧L</kbd> code</span>
   <span><kbd>N</kbd> cycle</span>
   <span><kbd>T</kbd> ascii</span>
   <span><kbd>K</kbd> mosh</span>
@@ -4638,6 +4644,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="ctrls-grid">
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd><kbd>⇧V</kbd></span><span class="ctrl-lbl">fx next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧L</kbd></span><span class="ctrl-lbl">live coding mode — strip to the null quale, restore on exit</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>I</kbd><kbd>⇧I</kbd></span><span class="ctrl-lbl">phase step next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd><kbd>⇧E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch / voxel</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧T</kbd></span><span class="ctrl-lbl">next theme</span></div>

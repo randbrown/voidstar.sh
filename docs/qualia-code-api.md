@@ -411,6 +411,8 @@ qualia.voxel({ depth: 2, tilt: .6 }) // voxel: cellSize, depth, cutoff, gap, smo
 qualia.logo(true); qualia.logoConfig({ caption: "voidstar" })
 qualia.blackout(true)              // screen dark, audio keeps running
 qualia.zen(true)                   // hide UI chrome
+qualia.code(true)                  // live coding mode: snapshot + strip to the null quale
+qualia.livecode(false)             // (alias) restore the scene
 qualia.pause(true)                 // brake visuals + transports
 qualia.fullscreen(true)
 qualia.theme("phosphor")           // qualia.themes() lists; cycleTheme(±1)
@@ -429,6 +431,47 @@ stage — pass `{audio: false}` or `{visuals: false}` to fade only one side.
 The fade *multiplies* the mixer levels (faders don't move), never persists
 (a reload comes back at full level), and a manual fader/mute touch mid-fade
 re-applies that channel at the fade's target level.
+
+#### Live coding mode — `qualia.code()` / `qualia.livecode()`
+
+One call to clear the stage for writing code in front of people, and one to
+put it back. Also the topbar **code** button and **⇧L**.
+Implementation: [`src/lib/qualia/code-mode.js`](../src/lib/qualia/code-mode.js).
+
+```js
+qualia.code(true)        // enter: snapshot, then strip
+qualia.code(false)       // exit: restore
+qualia.livecode(true)    // same function, for emphasis
+qualia.code()            // read back → true/false
+qualia.codeSnapshot()    // the saved values (null outside code mode)
+qualia.code("<0 1>/8")   // patterned, like any knob
+```
+
+- **Entering** saves the current quale, the auto-cycle and auto-phase
+  periods, every glitch post's mode, every overlay layer (skeleton, sparks,
+  aura, hands, nightcall, ripples, crawler), cam walk and the logo. Then it
+  switches each of them off and selects the null quale. Hydra, Strudel,
+  audio, the mixer, the theme, zen and the camera feed are left alone.
+- **Exiting** restores each saved value only if it is still the code-mode
+  value. Anything you changed while in code mode (a `quale("fractal")` from
+  Strudel, a post toggled on by hand) stays, and the exit notes it.
+- **Echo:** each change prints as the exact `qualia.*` call that makes it, as
+  one block on the api-echo strip at the bottom of the stage, shown even with
+  training mode (`qualia.echo`) off, so the audience sees what is switching.
+  Only things that actually changed are listed. Click a line to copy it. With
+  training mode off the block clears after 30 s; with it on, the next echoed
+  action replaces it. Zen hides the strip like the rest of the chrome.
+- The snapshot is kept in localStorage, so a reload in code mode still
+  restores on exit.
+
+```text
+qualia.code(true)  // live coding mode
+qualia.autoCycle(0)
+qualia.glitch('mosh', 'off')
+qualia.overlay('sparks', false)
+qualia.cam.walk(false)
+qualia.quale('null')
+```
 
 ### Live signal reads (for conditionals)
 
