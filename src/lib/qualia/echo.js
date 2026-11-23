@@ -22,6 +22,8 @@ import { getBool, setBool } from './prefs.js';
 const KEY = 'voidstar.qualia.echo';
 const MAX_LINES = 3;
 const IDLE_FADE_MS = 8000;   // strip dims after a quiet spell
+const BURST_MAX = 16;        // a burst (code mode) can show this many lines at once
+const BURST_TTL_MS = 30000;  // burst shown with training mode OFF clears after this
 
 /** Format a JS value the way the docs write it: numbers rounded to ≤3
  *  decimals, strings single-quoted, booleans/others literal. */
@@ -40,9 +42,42 @@ export function createEcho() {
   /** @type {{key: string, el: HTMLElement}[]} newest last */
   const lines = [];
   let fadeT = null;
+  // A burst is a block of lines printed together (live-coding mode's
+  // enter/exit), shown even with training mode off so the audience sees the
+  // calls. `burstOn` keeps the strip visible and every line full-strength;
+  // the next ordinary log ends it and trims back to MAX_LINES.
+  let burstOn = false;
+  let burstT = null;
 
   function applyVisibility() {
-    if (strip) strip.style.display = enabled && lines.length ? '' : 'none';
+    if (strip) strip.style.display = (enabled || burstOn) && lines.length ? '' : 'none';
+  }
+
+  function makeLine(expr) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = expr.startsWith('//') ? 'api-echo-line note' : 'api-echo-line';
+    el.title = 'click to copy';
+    el.textContent = expr;
+    el.addEventListener('click', () => {
+      try { navigator.clipboard?.writeText(el.textContent || ''); } catch {}
+      el.classList.add('copied');
+      setTimeout(() => el.classList.remove('copied'), 600);
+    });
+    return el;
+  }
+
+  function clearLines() {
+    for (const l of lines) l.el.remove();
+    lines.length = 0;
+  }
+
+  function endBurst() {
+    if (burstT) { clearTimeout(burstT); burstT = null; }
+    if (!burstOn) return;
+    burstOn = false;
+    strip?.classList.remove('burst');
+    if (!enabled) clearLines();
   }
 
   function poke() {
@@ -59,21 +94,13 @@ export function createEcho() {
    */
   function log(expr, key) {
     if (!enabled || !strip) return;
+    if (burstOn) endBurst();
     const k = key || expr.slice(0, expr.indexOf('(') + 1 || expr.length);
     const last = lines[lines.length - 1];
     if (last && last.key === k) {
       last.el.textContent = expr;
     } else {
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'api-echo-line';
-      el.title = 'click to copy';
-      el.textContent = expr;
-      el.addEventListener('click', () => {
-        try { navigator.clipboard?.writeText(el.textContent || ''); } catch {}
-        el.classList.add('copied');
-        setTimeout(() => el.classList.remove('copied'), 600);
-      });
+      const el = makeLine(expr);
       strip.appendChild(el);
       lines.push({ key: k, el });
       while (lines.length > MAX_LINES) {
@@ -85,18 +112,41 @@ export function createEcho() {
     poke();
   }
 
+  /**
+   * Print a block of expressions at once, replacing whatever is on the
+   * strip — shown even with training mode off (this is the on-stage
+   * "here's what just happened" for live-coding mode). Every line stays
+   * full-strength until the next ordinary log. With training mode off the
+   * block clears itself after BURST_TTL_MS.
+   */
+  function burst(exprs) {
+    if (!strip || !exprs?.length) return;
+    if (burstT) { clearTimeout(burstT); burstT = null; }
+    clearLines();
+    for (const expr of exprs.slice(-BURST_MAX)) {
+      const el = makeLine(expr);
+      strip.appendChild(el);
+      lines.push({ key: `burst:${lines.length}`, el });
+    }
+    burstOn = true;
+    strip.classList.add('burst');
+    if (!enabled) {
+      burstT = setTimeout(() => { burstT = null; endBurst(); applyVisibility(); }, BURST_TTL_MS);
+    }
+    applyVisibility();
+    poke();
+  }
+
   function setEnabled(on) {
     enabled = !!on;
     setBool(KEY, enabled);
+    endBurst();
     if (enabled) log("qualia.echo(true)  // training mode — UI actions echo their API call");
-    else {
-      for (const l of lines) l.el.remove();
-      lines.length = 0;
-    }
+    else clearLines();
     applyVisibility();
     return enabled;
   }
 
   applyVisibility();
-  return { log, setEnabled, isEnabled: () => enabled };
+  return { log, burst, setEnabled, isEnabled: () => enabled };
 }

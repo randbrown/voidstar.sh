@@ -45,6 +45,7 @@ import { getBool, setBool } from './prefs.js';
 import { makeViz } from './viz-opts.js';
 import { makePalette } from './code-palette.js';
 import { makeKit } from './code-kit.js';
+import { createCodeMode } from './code-mode.js';
 import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId } from './samples-manifest.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
@@ -368,9 +369,12 @@ export function installCodeApi(deps) {
     /** overlay('skeleton') reads; overlay('sparks', false) writes;
      *  overlay('sparks', "<0 1>") returns a lane toggling per event. */
     overlay: (key, on) => {
+      // page.setOverlay also repaints the layer's button and persists it,
+      // like a click would (raw overlay.setOption left both stale).
+      const write = (v) => (page.setOverlay ? page.setOverlay(key, v) : overlay.setOption(key, v));
       if (on === undefined) return overlay.getOption(key);
-      if (isPattern(on)) return knobLane(on, (v) => overlay.setOption(key, patBool(v)));
-      overlay.setOption(key, !!on);
+      if (isPattern(on)) return knobLane(on, (v) => write(patBool(v)));
+      write(!!on);
       return overlay.getOption(key);
     },
     sparkStyle: gs(() => overlay.getSparkStyle(), (s) => overlay.setSparkStyle(s)),
@@ -788,6 +792,53 @@ export function installCodeApi(deps) {
       return `${hits.length} entries`;
     },
   };
+
+  // — live-coding mode (code-mode.js) —
+  // Every control goes through the public api, so code mode switches things
+  // exactly the way typing the echoed line would.
+  const CODE_OVERLAYS = ['skeleton', 'sparks', 'aura', 'hands', 'nightcall', 'ripples', 'crawler'];
+  const codeMode = createCodeMode({
+    controls: [
+      { key: 'autoCycle', label: 'auto-cycle', off: 0,
+        get: () => page.getCyclePeriod(), set: (v) => api.autoCycle(v),
+        expr: (v) => `qualia.autoCycle(${v})` },
+      { key: 'autoPhase', label: 'auto-phase', off: 0,
+        get: () => page.getPhasePeriod(), set: (v) => api.autoPhase(v),
+        expr: (v) => `qualia.autoPhase(${v})` },
+      ...Object.keys(page.getGlitchModes()).map((name) => ({
+        key: `glitch.${name}`, label: name, off: 'off',
+        get: () => page.getGlitchModes()[name], set: (v) => api.glitch(name, v),
+        expr: (v) => `qualia.glitch('${name}', '${v}')`,
+      })),
+      ...CODE_OVERLAYS.map((key) => ({
+        key: `overlay.${key}`, label: key, off: false,
+        // nightcall: the user's state, not a horns-flash transient.
+        get: () => !!(page.getOverlay ? page.getOverlay(key) : overlay.getOption(key)),
+        set: (v) => api.overlay(key, v),
+        expr: (v) => `qualia.overlay('${key}', ${v})`,
+      })),
+      { key: 'camWalk', label: 'cam walk', off: false,
+        get: () => !!camWalk.isEnabled(), set: (v) => api.cam.walk(v),
+        expr: (v) => `qualia.cam.walk(${v})` },
+      { key: 'logo', label: 'logo', off: false,
+        get: () => !!logoMark.isEnabled(), set: (v) => api.logo(v),
+        expr: (v) => `qualia.logo(${v})` },
+      { key: 'quale', label: 'quale', off: 'null',
+        get: () => core.activeId(), set: (v) => setQuale(v),
+        expr: (v) => `qualia.quale('${v}')` },
+    ],
+    show: (lines) => echoCtl?.burst?.(lines),
+    onChange: (on) => page.onCodeMode?.(on),
+  });
+  /** Live-coding mode: code(true) snapshots the scene and strips it bare
+   *  (auto-cycle/phase, posts, layers, cam walk, logo off; null quale);
+   *  code(false) restores whatever you didn't change meanwhile. Each change
+   *  echoes as its qualia.* call on the stage. code() reads; a pattern
+   *  toggles per event. `livecode` is the same function. */
+  api.code = gsBool(() => codeMode.isActive(), (on) => codeMode.set(on));
+  api.livecode = api.code;
+  /** Values code mode saved on entry (null when not in code mode). */
+  api.codeSnapshot = () => codeMode.snapshot();
 
   // Merge into the object strudel-hydra created. Existing keys win — nothing
   // this module defines may break `setParam`/`getField`/`mixer`/the editor
