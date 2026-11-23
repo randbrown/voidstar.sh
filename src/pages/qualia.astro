@@ -3987,6 +3987,34 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </div>
 
+  <!-- ASCII card — colour mode + character size for the ASCII glitch post.
+       Shown while ascii is in any non-off mode, like the mosh/edge cards. -->
+  <div id="ascii-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="ascii-card">
+      <span class="qp-title">ascii</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="ascii-color" title="mono: one theme tint · color: each character in the colour of the pixels under it · theme: coloured by brightness along the theme's hue arc">
+        <label>color</label>
+        <span>
+          <button class="qp-toggle" data-ascii-color="mono">mono</button>
+          <button class="qp-toggle" data-ascii-color="color">color</button>
+          <button class="qp-toggle" data-ascii-color="theme">theme</button>
+        </span>
+      </div>
+      <div class="qp-row" data-qp="ascii-vivid" title="Lift dim colours toward full brightness, keeping their hue (color mode)">
+        <label>vivid<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.6">
+      </div>
+      <div class="qp-row" data-qp="ascii-cell" title="Character height — smaller is finer detail (and more text to draw)">
+        <label>cell<span class="qp-val"></span></label>
+        <input type="range" min="8" max="32" step="1" value="14">
+      </div>
+    </div>
+  </div>
+
   <!-- Crawler card — tunables for the procedural spider layer (crawler.js,
        composited by overlay.js). Shown while the layer is on, like the
        mosh/edge cards. -->
@@ -4559,6 +4587,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+  <button class="qp-tab" data-card="ascii-card"  role="tab">ascii</button>
   <button class="qp-tab" data-card="stitch-card" role="tab">stitch</button>
   <button class="qp-tab" data-card="voxel-card"  role="tab">voxel</button>
   <button class="qp-tab" data-card="crawler-card" role="tab">crawler</button>
