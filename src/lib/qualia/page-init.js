@@ -1159,7 +1159,7 @@ export function initQualiaPage() {
     prGrab.disabled = !ok;
     prGrab.textContent = `grab last ${prGrabSec?.value || 10}s`;
     prGrab.title = ok
-      ? `Grab the last few seconds of the ${mic ? 'mic input' : 'captured app audio'} into the deck (⇧G) — then set A/B on the lick and slow it down.`
+      ? `Grab the last few seconds of the ${mic ? 'mic input' : 'captured app audio'} into the deck (⇧O) — then set A/B on the lick and slow it down.`
       : mic
         ? 'Open the mic first: pick your loopback device (e.g. BlackHole 2ch) as the mic and set audio to mic or all. The grab pulls from its last 40 s.'
         : 'Turn on "capture app audio…" first — the grab pulls from its lookback (last 40 s).';
@@ -9312,17 +9312,6 @@ export function initQualiaPage() {
     const knob = KNOB_BY_CODE[e.code];
     if (knob) { knob(); e.preventDefault(); return; }
 
-    // ⇧0 = switch the rig between mini (pedalboard) and full, opening it first
-    // if it's closed. Matched by physical key: shift+0 is ')' on US layouts
-    // but something else elsewhere, so e.key can't be trusted for it (a pad
-    // that sends only a character falls back to ')').
-    if (e.shiftKey && (e.code === 'Digit0' || (!e.code && e.key === ')'))) {
-      if (!looper.isOpen()) padActions.rigPanel();
-      document.getElementById('btn-rig-mini')?.click();
-      e.preventDefault();
-      return;
-    }
-
     switch (e.key.toLowerCase()) {
       case 'v': if (e.shiftKey) padActions.qualePrev(); else padActions.qualeNext(); break;   // quale prev / next
       case 'a': btnAudio.click(); break;
@@ -9354,8 +9343,15 @@ export function initQualiaPage() {
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
       // G = show/hide the rig panel (aura has no hotkey — its overlay button
-      // stays in the layers menu). ⇧G grabs app audio into the deck.
-      case 'g': if (e.shiftKey) padActions.deckGrab(); else padActions.rigPanel(); break;
+      // stays in the layers menu). ⇧G = switch the rig between mini
+      // (pedalboard) and full, opening it first if it's closed.
+      case 'g':
+        if (e.shiftKey) {
+          if (!looper.isOpen()) padActions.rigPanel();
+          document.getElementById('btn-rig-mini')?.click();
+        } else padActions.rigPanel();
+        break;
+      case 'o': if (e.shiftKey) padActions.deckGrab(); break;   // ⇧O = grab app audio into the deck
       case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
       case 't': if (e.shiftKey) cycleTheme(1); else btnAscii.click(); break;   // ascii / ⇧ next theme
       case 'k': btnMosh.click(); break;

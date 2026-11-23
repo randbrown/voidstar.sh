@@ -4678,11 +4678,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
     <div class="ctrls-grid">
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner (opens rig) / earth / metal</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>G</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧0</kbd> mini / full</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>G</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧G</kbd> mini / full</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧G</kbd></span><span class="ctrl-lbl">deck: grab captured app audio to practice</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧O</kbd></span><span class="ctrl-lbl">deck: grab captured app audio to practice</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>;</kbd><kbd>'</kbd><kbd>\</kbd><kbd>⌫</kbd></span><span class="ctrl-lbl">freeze — grab/layer · pop · re-frz top · clear stack</span></div>
     </div>
 
@@ -4927,7 +4927,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          one click opens that gate. Hidden while signal flows. -->
     <button class="ctrl-btn rig-sig-state" id="rig-sig-state" style="display:none"></button>
     <span class="rig-head-spacer"></span>
-    <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧0)">▤</button>
+    <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧G)">▤</button>
     <!-- ◌ sits immediately left of × in every panel (injectPanelIO inserts the
          save/load chip before it, keeping the corner order [io] ◌ ×). -->
     <button class="ctrl-btn rig-mini-toggle" id="btn-rig-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the rig floats clear over the visuals">◌</button>
@@ -5175,7 +5175,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
             <option value="30">30 s</option>
             <option value="40">40 s</option>
           </select>
-          <button type="button" class="ctrl-btn" data-qp="grab" disabled title="Grab the last few seconds into the deck (⇧G) — then set A/B on the lick and slow it down.">grab</button>
+          <button type="button" class="ctrl-btn" data-qp="grab" disabled title="Grab the last few seconds into the deck (⇧O) — then set A/B on the lick and slow it down.">grab</button>
         </div>
         <div class="qp-practice-row">
           <span class="qp-practice-label">loop</span>

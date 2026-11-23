@@ -3357,7 +3357,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (btnMini) {
       btnMini.classList.toggle('active', !model.mini);
       btnMini.setAttribute('aria-pressed', model.mini ? 'false' : 'true');
-      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧0)' : 'Full rig view — click to condense to the pedalboard (⇧0)';
+      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧G)' : 'Full rig view — click to condense to the pedalboard (⇧G)';
     }
     if (model.mini) {
       buildMiniUI();
