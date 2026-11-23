@@ -143,7 +143,10 @@ const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
 //   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
 //   flip: toggles glitch state on each hard kick (persists between hits)
 // When several glitches are in blip/flip mode, hard kicks rotate through
-// them round-robin — two blips alternate, three cycle, etc.
+// them round-robin — two blips alternate, three cycle, etc. A flip always
+// returns to the DEFAULT look on the following kick before the rotation
+// moves on (default → flip1 → default → flip2 → default → …). The default is
+// the glitch set to 'on' if there is one, otherwise the unprocessed view.
 // Glitches are independent of the auto-phase styles — whatever mode you set
 // here stays put while phases/palettes rotate.
 // Audio source modes. The button cycles through these:
@@ -3549,6 +3552,7 @@ export function initQualiaPage() {
   // styles — whatever mode is set here stays put while phases/palettes
   // rotate. Buttons cycle modes on click; the active class is bound to the
   // MODE so a glitch in 'on' always reads as active.
+  let defaultGlitch = null;   // remembered 'on' winner, see captureDefaultGlitch
   const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge, stitch: btnStitch, voxel: btnVoxel, negative: btnNegative };
   function refreshGlitchBtn(glitch) {
     const btn = btnByGlitch[glitch];
@@ -3568,9 +3572,27 @@ export function initQualiaPage() {
     // ascii/mosh/edge mutex keeps only one rendering at a time if the user
     // sets multiple to 'on'.
     overlay.setOption(glitch, mode === 'on');
+    // Taking a showing glitch out of 'on' (or out of a live flip/blip) must
+    // not leave the stage blank when another glitch is still 'on' — the
+    // mutex hid it, so put the default back.
+    if (mode !== 'on') restoreDefaultGlitch();
     refreshGlitchBtn(glitch);
     syncPostBtns();
     settings.save();
+  }
+  // The "default" post look: the glitch set to 'on' (the last-set one if
+  // several are — the overlay mutex shows one at a time), else none. Blip /
+  // flip glitches temporarily replace it via the mutex; this puts it back.
+  function captureDefaultGlitch() {
+    const shown = GLITCH_KEYS.find(g => overlay.getOption(g));
+    if (shown && glitchModes[shown] === 'on') defaultGlitch = shown;
+  }
+  function restoreDefaultGlitch() {
+    if (GLITCH_KEYS.some(g => overlay.getOption(g))) return;   // something is up
+    const g = glitchModes[defaultGlitch] === 'on'
+      ? defaultGlitch
+      : GLITCH_KEYS.findLast(k => glitchModes[k] === 'on');
+    if (g) overlay.setOption(g, true);
   }
   function cycleGlitchMode(glitch) {
     const i = GLITCH_MODES.indexOf(glitchModes[glitch]);
@@ -9621,12 +9643,17 @@ export function initQualiaPage() {
   // enforces only one visible glitch at a time, so triggering one cleanly
   // avoids last-iteration-wins flicker). The cursor tracks the last WINNER's
   // name rather than an index so mode changes between kicks can't skip or
-  // double-fire an entry. A flip winner still toggles: with a single flip
-  // glitch kicks alternate it on/off (the original behaviour); with several,
-  // the mutex has already hidden the previous one, so the toggle always
-  // lands "on" and the visible glitch rotates through the set.
+  // double-fire an entry.
+  // Flip is a two-kick toggle: the kick that brings a flip glitch up is
+  // followed by a kick that takes it down again and restores the DEFAULT
+  // look (the glitch in 'on', else unprocessed) — that "return" kick does
+  // not advance the rotation. So with flips A and B the stage goes
+  // default → A → default → B → default → A …; a single flip alternates
+  // on/off exactly as before. A blip flashes over the default and the
+  // default comes back when its window closes.
   let glitchLastConsumedHardKickAt = 0;
   let glitchLastWinner = null;
+  let flipShowing = null;   // the flip glitch the last kick brought up, if any
   // onTick (full rAF rate): consume hard-kicks and auto-clear blip windows
   // promptly regardless of the viz frame cap; overlay.setOption just flips a
   // flag, the visible change lands on the next rendered frame.
@@ -9635,20 +9662,27 @@ export function initQualiaPage() {
       glitchModes[g] === 'blip' || glitchModes[g] === 'flip');
     if (reactive.length === 0) {
       for (const g of GLITCH_KEYS) blipExpiresAt[g] = 0;
+      flipShowing = null;
       return;
     }
     const now = performance.now();
     if (lastHardKickAt > glitchLastConsumedHardKickAt) {
       glitchLastConsumedHardKickAt = lastHardKickAt;
-      // indexOf is -1 when the last winner left the set (mode changed) or on
-      // the first kick — either way the rotation restarts at entry 0.
-      const winner = reactive[(reactive.indexOf(glitchLastWinner) + 1) % reactive.length];
-      glitchLastWinner = winner;
-      if (glitchModes[winner] === 'blip') {
+      if (flipShowing && glitchModes[flipShowing] === 'flip' && overlay.getOption(flipShowing)) {
+        // Return kick — drop the flip, bring the default back.
+        overlay.setOption(flipShowing, false);
+        flipShowing = null;
+        restoreDefaultGlitch();
+      } else {
+        flipShowing = null;
+        captureDefaultGlitch();
+        // indexOf is -1 when the last winner left the set (mode changed) or
+        // on the first kick — either way the rotation restarts at entry 0.
+        const winner = reactive[(reactive.indexOf(glitchLastWinner) + 1) % reactive.length];
+        glitchLastWinner = winner;
         overlay.setOption(winner, true);
-        blipExpiresAt[winner] = now + BLIP_DURATION_MS;
-      } else { // flip
-        overlay.setOption(winner, !overlay.getOption(winner));
+        if (glitchModes[winner] === 'blip') blipExpiresAt[winner] = now + BLIP_DURATION_MS;
+        else flipShowing = winner;
       }
     }
     // Auto-clear any active blips whose windows have elapsed.
@@ -9656,6 +9690,7 @@ export function initQualiaPage() {
       if (glitchModes[g] === 'blip' && blipExpiresAt[g] && now >= blipExpiresAt[g]) {
         overlay.setOption(g, false);
         blipExpiresAt[g] = 0;
+        restoreDefaultGlitch();
       }
     }
   });

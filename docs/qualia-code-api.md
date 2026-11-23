@@ -402,6 +402,9 @@ qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|p
                                    // code (grip the Strudel editor's words while it's unfocused),
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip
+                                   // blip/flip fire on hard kicks, round-robin across glitches;
+                                   // a flip returns to the default (the 'on' glitch, else none)
+                                   // on the next kick: default → flip1 → default → flip2 → …
 qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch / qualia.voxel
 qualia.ascii({ color: 'color' })   // ascii: color mono|color|theme (per-character colour from
                                    // the fx pixels / the theme's hue arc), vivid 0..1 (lift
