@@ -448,7 +448,7 @@ feeds (via `stream-ring.js`'s `attachRing`) the looper's recorder worklet (`work
 here — only its always-on ~40 s ring is used) through a 0-gain sink to
 `destination` that just keeps it pulled. `grab(seconds)` posts back the last N
 seconds as per-channel `Float32Array`s; page-init hands them to the deck's
-`filePlayer.loadBuffer()` (loop on) — the *grab last Ns* button / `⇧G` /
+`filePlayer.loadBuffer()` (loop on) — the *grab last Ns* button / `⇧O` /
 `padActions.deckGrab`. Cost: one block copy per render quantum on the audio thread
 and ~15 MB while capturing; `stop()` posts `dispose` so the ring is freed. Nothing
 runs when capture is off.

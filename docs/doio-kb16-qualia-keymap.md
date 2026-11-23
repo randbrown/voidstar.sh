@@ -72,7 +72,7 @@ toggles the tuner on and off.
 | | col 1 | col 2 | col 3 | col 4 |
 |---|---|---|---|---|
 | **row 1** | → HOME (L0) | → AUDIO layer | pose `P` | cam walk `U` |
-| **row 2** | skeleton `J` | sparks `F` | aura `G` | ripples `B` |
+| **row 2** | skeleton `J` | sparks `F` | rig show/hide `G` | ripples `B` |
 | **row 3** | cam size `C` | next camera `8` | mirror `M` | rotate `R` |
 | **row 4** | quale ◀ `⇧V` | quale ▶ `V` | phase ◀ `⇧I` | phase ▶ `I` |
 
