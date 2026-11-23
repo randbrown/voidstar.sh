@@ -9312,6 +9312,17 @@ export function initQualiaPage() {
     const knob = KNOB_BY_CODE[e.code];
     if (knob) { knob(); e.preventDefault(); return; }
 
+    // ⇧0 = switch the rig between mini (pedalboard) and full, opening it first
+    // if it's closed. Matched by physical key: shift+0 is ')' on US layouts
+    // but something else elsewhere, so e.key can't be trusted for it (a pad
+    // that sends only a character falls back to ')').
+    if (e.shiftKey && (e.code === 'Digit0' || (!e.code && e.key === ')'))) {
+      if (!looper.isOpen()) padActions.rigPanel();
+      document.getElementById('btn-rig-mini')?.click();
+      e.preventDefault();
+      return;
+    }
+
     switch (e.key.toLowerCase()) {
       case 'v': if (e.shiftKey) padActions.qualePrev(); else padActions.qualeNext(); break;   // quale prev / next
       case 'a': btnAudio.click(); break;
@@ -9325,16 +9336,6 @@ export function initQualiaPage() {
         // ⇧W = mute / unmute the vox output; W alone = show/hide panel.
         if (e.shiftKey) padActions.voxMute();
         else document.getElementById('btn-vocoder').click();
-        break;
-      case 'o':
-        // O = show/hide the rig panel. Shift+O = switch it between mini
-        // (pedalboard) and full, opening it first if it's closed.
-        if (e.shiftKey) {
-          if (!looper.isOpen()) document.getElementById('btn-looper').click();
-          document.getElementById('btn-rig-mini')?.click();
-        } else {
-          padActions.rigPanel();
-        }
         break;
       case 'p': {
         const opts = ['off','camera'];
@@ -9352,7 +9353,9 @@ export function initQualiaPage() {
       case 'm': padActions.camMirror(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
-      case 'g': if (e.shiftKey) padActions.deckGrab(); else btnAura.click(); break;   // aura / ⇧ grab app audio into the deck
+      // G = show/hide the rig panel (aura has no hotkey — its overlay button
+      // stays in the layers menu). ⇧G grabs app audio into the deck.
+      case 'g': if (e.shiftKey) padActions.deckGrab(); else padActions.rigPanel(); break;
       case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
       case 't': if (e.shiftKey) cycleTheme(1); else btnAscii.click(); break;   // ascii / ⇧ next theme
       case 'k': btnMosh.click(); break;

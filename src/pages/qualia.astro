@@ -3356,7 +3356,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-code" title="Live coding mode (⇧L) — snapshot the scene, then switch off auto-cycle/phase, post fx, layers, cam walk + logo and blank to the null quale. Tap again to restore. Same as qualia.code(true)." aria-pressed="false">code</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
-      <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
+      <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (G)">rig</button>
       <button class="ctrl-btn" id="btn-mixer" title="Mixer — levels, mutes, limiters &amp; clip meters">mix</button>
       <button class="ctrl-btn" id="btn-deck" title="Deck — play an audio file (mp3/wav/…) through the qualia signal; playback-synced screen recording + rig stem">deck</button>
       <div class="qg-group qg-capture" data-group="capture">
@@ -3466,7 +3466,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="emmons">atom sparks</option>
           <option value="shobud">suit sparks</option>
         </select>
-        <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (G)">aura</button>
+        <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura">aura</button>
         <!-- Nightcall eyes — red album-art eye glow on every tracked face.
              Homage to Vincent Belorgey (Kavinsky). -->
         <button class="ctrl-btn"        id="btn-nightcall" title="Nightcall eyes — red glow on tracked faces (homage to Kavinsky)">nightcall</button>
@@ -3632,7 +3632,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
-  <span><kbd>G</kbd> aura</span>
+  <span><kbd>G</kbd> rig</span>
   <span><kbd>P</kbd> pose src</span>
   <span><kbd>C</kbd> cam size</span>
   <span><kbd>R</kbd> rotate</span>
@@ -4651,12 +4651,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd><kbd>⇧E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch / voxel</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧T</kbd></span><span class="ctrl-lbl">next theme</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd></span><span class="ctrl-lbl">skeleton / sparks</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>C</kbd><kbd>8</kbd><kbd>M</kbd><kbd>R</kbd></span><span class="ctrl-lbl">cam size / next / mirror / rotate</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧R</kbd></span><span class="ctrl-lbl">screen record</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>A</kbd></span><span class="ctrl-lbl">audio on/off</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>S</kbd><kbd>Q</kbd><kbd>W</kbd><kbd>O</kbd></span><span class="ctrl-lbl">strudel / seq / vocoder / looper · <kbd>⇧S</kbd> play · <kbd>⇧W</kbd> vox mute</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>S</kbd><kbd>Q</kbd><kbd>W</kbd><kbd>G</kbd></span><span class="ctrl-lbl">strudel / seq / vocoder / rig · <kbd>⇧S</kbd> play · <kbd>⇧W</kbd> vox mute</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Z</kbd><kbd>X</kbd></span><span class="ctrl-lbl">zen / fullscreen · <kbd>⇧X</kbd> fullscreen editor (Esc exits)</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>H</kbd></span><span class="ctrl-lbl">blackout — screen off, audio keeps playing</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-lbl">pause</span></div>
@@ -4678,7 +4678,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
     <div class="ctrls-grid">
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner (opens rig) / earth / metal</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>O</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧O</kbd> mini / full</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>G</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧0</kbd> mini / full</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
@@ -4927,7 +4927,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          one click opens that gate. Hidden while signal flows. -->
     <button class="ctrl-btn rig-sig-state" id="rig-sig-state" style="display:none"></button>
     <span class="rig-head-spacer"></span>
-    <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧O)">▤</button>
+    <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧0)">▤</button>
     <!-- ◌ sits immediately left of × in every panel (injectPanelIO inserts the
          save/load chip before it, keeping the corner order [io] ◌ ×). -->
     <button class="ctrl-btn rig-mini-toggle" id="btn-rig-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the rig floats clear over the visuals">◌</button>
