@@ -3364,6 +3364,11 @@ export function initQualiaPage() {
   // text fields, and modal context menus are left to the native menu.
   document.addEventListener('contextmenu', (ev) => {
     if (ev.target.closest?.('#quick-menu')) { ev.preventDefault(); return; }
+    // A component already claimed this right-click with its own menu (the rig
+    // looper's per-track trim/delete menu calls preventDefault on its canvas).
+    // Without this the quick menu (z90) opened on top of it (z40) and the
+    // track menu was unreachable.
+    if (ev.defaultPrevented) return;
     // Camera preview: the native <video> menu (Loop / Save video frame / PiP)
     // is never what we want on stage — and in size-full or split mode the
     // preview covers most of the viewport, so without this every right-click
@@ -8572,30 +8577,11 @@ export function initQualiaPage() {
   // kept just under the topbar (20) so nothing covers the chrome.
   const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel', 'deck-panel'];
   const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
-  // The bottom HUD (tab bar + popped-out cards) is part of the same focus
-  // band: at its CSS defaults (stack 15, tabs 16) a floating editor dragged
-  // low sat on the cards for good — a stitch card half-buried under strudel
-  // with no way to reach it short of moving the editor. Touching the stack
-  // or tab bar floats both to the top of the band; touching an editor drops
-  // them back to defaults (which keep the video preview at 17 above the tab
-  // bar — the mobile-critical order — whenever the HUD isn't focused).
-  const hudStackEl = document.getElementById('panel-stack');
-  const hudTabsEl  = document.getElementById('panel-tabs');
-  function dropHudFocus() {
-    if (hudStackEl) hudStackEl.style.zIndex = '';
-    if (hudTabsEl)  hudTabsEl.style.zIndex  = '';
-  }
-  function bringHudToFront() {
-    if (hudStackEl) hudStackEl.style.zIndex = '19';
-    if (hudTabsEl)  hudTabsEl.style.zIndex  = '19';
-    for (const id of FLOAT_PANELS) {
-      const el = document.getElementById(id);
-      if (el) el.style.zIndex = '';
-    }
-  }
+  // The bottom HUD (tab bar + popped-out cards) is NOT part of this band: it
+  // sits at z20 in CSS so it always stacks above every floating editor — a
+  // panel dragged low can never bury the cards or the tab bar.
   function bringPanelToFront(panel) {
     if (!panel) return;
-    dropHudFocus();
     for (const id of FLOAT_PANELS) {
       const el = document.getElementById(id);
       if (el) el.style.zIndex = (el === panel) ? '19' : '';   // '' → CSS default (18)
@@ -8604,8 +8590,7 @@ export function initQualiaPage() {
   // Capture phase so it lands before each panel's own drag handler.
   document.addEventListener('pointerdown', (e) => {
     const panel = e.target?.closest?.(FLOAT_SEL);
-    if (panel) { bringPanelToFront(panel); return; }
-    if (e.target?.closest?.('#panel-stack, #panel-tabs')) bringHudToFront();
+    if (panel) bringPanelToFront(panel);
   }, true);
   // Opening a panel from its topbar button also raises it (covers "close, reopen
   // → on top" without needing a click inside). rAF runs after the toggle handler.

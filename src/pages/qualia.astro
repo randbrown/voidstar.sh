@@ -342,10 +342,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       position: fixed; bottom: 1.25rem; right: 1.25rem;
       width: 200px; height: auto; display: none;
       border-radius: 8px; border: 1px solid var(--border);
-      /* z-index 17 keeps the live preview above #panel-tabs (16) and
-         #panel-stack (15) — without this the preview renders behind the
-         mobile tab bar and the user sees a "camera not working" black
-         strip in the bottom-right. Small/large only: size-full and the
+      /* z-index 17 keeps the live preview above the fade scrim (15); it is
+         anchored above the tab bar via --tabs-h, so the lower HUD (z20)
+         never covers it. Small/large only: size-full and the
          split panels drop to z14 (below the HUD chrome) — full-viewport
          camera layers must never block the lower menu. */
       opacity: 1; z-index: 17;
@@ -710,7 +709,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #chron-pulse {
       position: fixed; left: 50%; transform: translateX(-50%);
       bottom: max(2.75rem, env(safe-area-inset-bottom));
-      z-index: 19;
+      z-index: 21;   /* stays over the lower HUD (20); pointer-events: none */
       font-family: var(--font-mono); font-size: 0.85rem;
       letter-spacing: 0.08em; font-variant-numeric: tabular-nums;
       color: var(--muted);
@@ -792,7 +791,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       position: fixed;
       bottom: calc(max(1.25rem, env(safe-area-inset-bottom)) + var(--tabs-h, 0px) + 0.4rem);
       left:   max(1.25rem, env(safe-area-inset-left));
-      z-index: 15;
+      /* z20: the lower HUD always stacks above the floating editors (18/19,
+         click-to-front) — a low-dragged strudel panel must never bury the
+         cards or the tab bar. Same band as the topbar (20); they never overlap. */
+      z-index: 20;
       display: flex; flex-direction: column-reverse; gap: 0.5rem;
       max-width: min(94vw, 340px);
       max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1.5rem);
@@ -828,7 +830,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       right:  max(0.5rem, env(safe-area-inset-right));
       max-width: min(94vw, 620px);
       bottom: max(0.5rem, env(safe-area-inset-bottom));
-      z-index: 16;
+      z-index: 20;   /* above the floating editors — see #panel-stack */
       flex-direction: row; gap: 0.3rem;
       padding: 0.3rem 0.4rem;
       background: var(--surface-glass); backdrop-filter: blur(12px);
