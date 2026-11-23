@@ -19,7 +19,7 @@ import { cssVar, onThemeChange } from './theme.js';
 import { getBool, setBool, getNum, setRaw } from './prefs.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import {
-  resolveManifest, toStrudelSampleMap, COLLECTIONS, collectionPacks, getActiveCollectionId,
+  resolveManifest, toStrudelSampleMap, COLLECTIONS, collectionPacks, getActiveCollectionId, onActiveCollectionChange,
 } from './samples-manifest.js';
 
 // Pinned, NOT @latest: a live set must not break because unpkg served a new
@@ -107,6 +107,9 @@ function loadStrudelScript() {
 // decodes lazily on first play, so it's safe to call as soon as the function
 // exists — we just poll briefly for it after the script loads.
 let _sharedSamplesRegistered = false;
+// collection id → [{ resolved, pack }] — kept so a collection switch can re-bind
+// the plain `<genre>_` names without re-fetching manifests.
+const _resolvedPacks = new Map();
 async function registerSharedSamples() {
   if (_sharedSamplesRegistered) return;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -114,28 +117,47 @@ async function registerSharedSamples() {
     await sleep(150);
   }
   if (typeof globalThis.samples !== 'function') return;
-  // Register both bundled collections, additively (never clobber Strudel's stock
+  // Register every bundled collection, additively (never clobber Strudel's stock
   // bd/sd/hh). Each pack registers under a collection-qualified `<bank><genre>_`
   // namespace so .bank("sigmetal") / .bank("v0metal") always reach a specific
-  // collection; the ACTIVE collection additionally registers under the plain
-  // `<genre>_` namespace so s("bd sd").bank("metal") plays whatever's active.
-  const activeId = getActiveCollectionId();
+  // collection; the ACTIVE collection additionally binds the plain `<genre>_`
+  // namespace (bindActiveCollection) so s("bd sd").bank("metal") plays
+  // whatever's active — re-bound live when kit.use() / the sequencer's source
+  // picker changes it.
   for (const c of COLLECTIONS) {
+    const list = [];
     for (const pack of collectionPacks(c.id)) {
       try {
         const resolved = await resolveManifest(pack.url);
         await globalThis.samples(toStrudelSampleMap(resolved, pack.bankPrefix));
-        if (c.id === activeId) {
-          await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix));
-        }
+        list.push({ resolved, pack });
       } catch (e) {
         console.warn(`[qualia] shared samples (${pack.id}) registration failed:`, e);
       }
     }
+    _resolvedPacks.set(c.id, list);
   }
   await registerSpeechSamples();
   _sharedSamplesRegistered = true;
+  // Bind whatever is active NOW — a switch during registration is honoured here.
+  await bindActiveCollection(getActiveCollectionId());
 }
+
+// Point the plain `<genre>_` banks at one collection. Every pack fills the same
+// ten voices, so re-registering overwrites the previous collection's names
+// cleanly. Serialised so rapid switches land in order (last one wins).
+let _bindChain = Promise.resolve();
+function bindActiveCollection(id) {
+  _bindChain = _bindChain.then(async () => {
+    if (typeof globalThis.samples !== 'function') return;
+    for (const { resolved, pack } of _resolvedPacks.get(id) || []) {
+      try { await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix)); }
+      catch (e) { console.warn(`[qualia] plain bank bind (${pack.id}) failed:`, e); }
+    }
+  });
+  return _bindChain;
+}
+onActiveCollectionChange((id) => { if (_sharedSamplesRegistered) bindActiveCollection(id); });
 
 // Bundled speech one-shots: shabda TTS renders captured into the repo by
 // scripts/fetch-shabda-speech.mjs (data: URLs, so they play offline). Registered

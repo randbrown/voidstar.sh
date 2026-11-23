@@ -3,7 +3,7 @@
 
 import { parseCssColor, rgbToHex, hslToRgb, makePalette, PALETTE_TOKENS } from '../src/lib/qualia/code-palette.js';
 import { makeKit, KIT_VOICES } from '../src/lib/qualia/code-kit.js';
-import { COLLECTIONS, GENRES, GENRE_DESCS } from '../src/lib/qualia/samples-manifest.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId, setActiveCollectionId, onActiveCollectionChange } from '../src/lib/qualia/samples-manifest.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -79,6 +79,30 @@ check('ls() flags the network collection', kd.ls('r0').every((r) => r.about.incl
 console.warn = () => {};
 check('ls(unknown) → []', kd.ls('polka').length === 0);
 console.warn = warn; console.table = tbl;
+
+console.log('\nkit.use');
+{
+  let cur = 'signature';
+  const ku = makeKit({ collections: COLLECTIONS, genres: GENRES, active: () => cur, setActive: (id) => (cur = id) });
+  check('use() reads active', ku.use() === 'signature');
+  check('use(bank token)', ku.use('v0') === 'voidstar_0' && ku.active() === 'voidstar_0');
+  check('use(id)', ku.use('real_0') === 'real_0');
+  check('use() ignores case', ku.use('SIG') === 'signature');
+  check('every collection reachable by bank + id', COLLECTIONS.every((c) => ku.use(c.bank) === c.id && ku.use(c.id) === c.id));
+  console.warn = () => {};
+  ku.use('sig');
+  check('use(unknown) keeps active', ku.use('polka') === 'signature');
+  console.warn = warn;
+  // The live manifest value notifies listeners only on a real change.
+  const seen = [];
+  const off = onActiveCollectionChange((id) => seen.push(id));
+  const start = getActiveCollectionId();
+  const other = COLLECTIONS.find((c) => c.id !== start).id;
+  setActiveCollectionId(other); setActiveCollectionId(other); setActiveCollectionId('nope');
+  check('listener fires once per real change', seen.length === 1 && seen[0] === other, seen);
+  off(); setActiveCollectionId(start);
+  check('unsubscribe', seen.length === 1);
+}
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

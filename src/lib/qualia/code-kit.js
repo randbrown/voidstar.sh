@@ -6,9 +6,10 @@
 //   s("bd*2 sd").bank(kit.ab('metal'))      // '<sigmetal v0metal r0metal>' — A/B per cycle
 //   s("bd hh sd hh").bank(kit.tour())       // every genre in turn, active collection
 //   kit.ls()  /  kit.ls('metal')  /  kit.ls('r0')   // cheatsheet table in the console
+//   kit.use('v0')                           // plain .bank("dub") now plays v0dub
 //
-// The plain genre (`.bank("metal")`) plays whichever collection is active in
-// the sequencer; kit.<bank>.<genre> pins one. Registration lives in
+// The plain genre (`.bank("metal")`) plays whichever collection is active (set
+// by kit.use() or the sequencer's source picker); kit.<bank>.<genre> pins one. Registration lives in
 // strudel-hydra.js (registerSharedSamples); see docs/samples.md.
 
 /** The voice contract every bundled pack fills (public/samples/README.md). */
@@ -17,9 +18,10 @@ export const KIT_VOICES = ['bd', 'sd', 'rim', 'hh', 'oh', 'lt', 'mt', 'ht', 'rd'
 /**
  * @param {{ collections: Array<{id:string, bank:string, remote?:boolean}>,
  *           genres: string[], active: () => string,
+ *           setActive?: (id: string) => string,
  *           genreDescs?: Record<string, string> }} env
  */
-export function makeKit({ collections, genres, active, genreDescs = {} }) {
+export function makeKit({ collections, genres, active, setActive, genreDescs = {} }) {
   const byRef = (ref) => collections.find((c) => c.bank === ref || c.id === ref);
   const kit = {
     /** Genre names, in picker order. */
@@ -30,6 +32,18 @@ export function makeKit({ collections, genres, active, genreDescs = {} }) {
     collections: collections.map(({ id, bank, remote }) => ({ id, bank, remote: !!remote })),
     /** Active collection id (the one plain .bank("<genre>") plays). */
     active: () => active(),
+    /** Switch the active collection — bank token or id: kit.use('v0'),
+     *  kit.use('voidstar_0'). Plain .bank("<genre>") re-binds live (no reload)
+     *  and the choice persists. Returns the active id; no arg just reads it. */
+    use: (collection) => {
+      if (collection === undefined) return active();
+      const c = byRef(String(collection).trim().toLowerCase());
+      if (!c) {
+        console.warn(`[qualia] kit.use: unknown collection "${collection}" — try one of: ${collections.map((x) => `${x.bank} (${x.id})`).join(', ')}`);
+        return active();
+      }
+      return setActive ? setActive(c.id) : active();
+    },
     /** Bank name for a genre in a collection (bank token or id; default: the
      *  plain, active-collection name). Unknown genre → '' with a warning. */
     bank: (genre, collection) => {

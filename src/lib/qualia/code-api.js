@@ -46,7 +46,7 @@ import { makeViz } from './viz-opts.js';
 import { makePalette } from './code-palette.js';
 import { makeKit } from './code-kit.js';
 import { createCodeMode } from './code-mode.js';
-import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId } from './samples-manifest.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId, setActiveCollectionId } from './samples-manifest.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
   edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
@@ -257,9 +257,9 @@ export function installCodeApi(deps) {
      *  for Hydra. Also a bare global `palette`. */
     palette: makePalette({ color: computedColor, knobs: readKnobs }),
     /** Sample bank names: kit.sig.metal → 'sigmetal', kit.ab('metal'),
-     *  kit.tour(), kit.ls() cheatsheet, kit.voices / genres / collections.
-     *  Also a bare global `kit`. */
-    kit: makeKit({ collections: COLLECTIONS, genres: GENRES, active: getActiveCollectionId, genreDescs: GENRE_DESCS }),
+     *  kit.tour(), kit.ls() cheatsheet, kit.use('v0') to switch the active
+     *  collection, kit.voices / genres / collections. Also a bare global `kit`. */
+    kit: makeKit({ collections: COLLECTIONS, genres: GENRES, active: getActiveCollectionId, setActive: setActiveCollectionId, genreDescs: GENRE_DESCS }),
 
     // — quales —
     /** List registered quales as [{id, name}] in dropdown order. */

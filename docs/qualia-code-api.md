@@ -150,10 +150,20 @@ stack(
 | `kit.tour()` / `tour('sig')` | every genre in turn: active collection / pinned |
 | `kit.bank(genre, bank?)` | the name, with a warning on a typo |
 | `kit.ls()` / `ls(genre \| prefix \| 'active')` | the cheatsheet below as a console table (returns the rows) |
+| `kit.use(collection)` | switch the active collection by prefix or id (`'sig'`/`'signature'`, `'v0'`/`'voidstar_0'`, `'r0'`/`'real_0'`); bare genre banks re-bind live, no reload, and the choice persists. Returns the active id (`kit.use()` alone just reads it) |
 | `kit.voices` · `genres` · `collections` · `active()` | the ten voice names (`bd sd rim hh oh lt mt ht rd cr`), genres, collections, the active collection id |
 
-Plain `.bank("metal")` still plays whichever collection the sequencer has
-active. `kit.ls()` prints the table below in the browser console (and returns
+Plain `.bank("metal")` plays whichever collection is active: the last one
+chosen with `kit.use()` or the sequencer's source picker (signature on a fresh
+browser). Both set the same value, so either one re-points every bare genre
+bank at once:
+
+```js
+kit.use('v0')                 // now "dub" = v0dub, "metal" = v0metal, …
+s("bd*2 [~ sd] hh*4").bank("dub")
+```
+
+Unknown names warn and leave the active collection alone. `kit.ls()` prints the table below in the browser console (and returns
 it as rows); `kit.ls('metal')` / `kit.ls('r0')` / `kit.ls('active')` filter it.
 
 #### Bank name cheatsheet
@@ -167,8 +177,8 @@ camel case reads better to you. Avoid `:` (mini-notation's sample index).
 
 | Collection | Prefix | What it is |
 |---|---|---|
-| active | *(none)* | `metal`, `lofi`, …: whichever collection the sequencer is set to (signature by default) |
-| signature | `sig` | Characterful on-brand synthetic one-shots. Offline. |
+| active | *(none)* | `metal`, `lofi`, …: whichever collection `kit.use()` or the sequencer's source picker last set (signature by default) |
+| signature *(default)* | `sig` | Characterful on-brand synthetic one-shots. Offline. |
 | voidstar_0 | `v0` | The original synthetic packs, a neutral baseline. Offline. |
 | real_0 | `r0` | Real drum-machine recordings, streamed. **Needs network.** |
 

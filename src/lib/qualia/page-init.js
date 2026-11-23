@@ -29,7 +29,7 @@ import { createFader } from './fade.js';
 import { createEcho, fmtVal } from './echo.js';
 import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-reference.js';
 import { groupSounds, filterGroups, SOUND_VIEWS } from './sound-groups.js';
-import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId } from './samples-manifest.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId, onActiveCollectionChange } from './samples-manifest.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
@@ -7681,6 +7681,9 @@ export function initQualiaPage() {
     }
   }
 
+  // kit.use() / the sequencer's source picker re-points the plain genre banks —
+  // refresh the 'active · …' labels if the list is already showing.
+  onActiveCollectionChange(() => { if (soundListEl?.childElementCount) renderSoundList(); });
   function renderSoundList() {
     if (!soundListEl) return;
     soundListEl.innerHTML = '';
