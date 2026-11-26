@@ -11,6 +11,7 @@
 // new ones on beats). `render()` paints the overlay. Both should run
 // after the active fx's render() so the overlay lands on top.
 
+import { createEdgeGL } from './post-edge-gl.js';
 import { lmToCanvas } from './video.js';
 import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
@@ -1216,23 +1217,19 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       for (let i = 3; i < data.length; i += 4) data[i] = 255;
     }
   }
+  // GPU Sobel (post-edge-gl.js) — built on first edge frame; null → CPU pass.
+  let edgeGL, edgeGLTried = false;
+  function edgeWorkSize() {
+    const W = canvas.width, H = canvas.height;
+    const scale = Math.min(1, 1280 / Math.max(1, W));
+    return [Math.max(2, Math.round(W * scale)), Math.max(2, Math.round(H * scale))];
+  }
   function renderEdge(field) {
     // Post passes paint the post canvas (walk-scoped separately from pose).
     const ctx = postCtx;
     const main = getMainCanvas?.();
     if (!main) return;
     const W = canvas.width, H = canvas.height;
-    ensureEdgeBufs();
-    const wW = edgeWW, wH = edgeWH;
-
-    edgeCtx.globalCompositeOperation = 'copy';
-    try {
-      edgeCtx.drawImage(main, 0, 0, wW, wH);
-    } catch {
-      return;
-    }
-    const src = edgeCtx.getImageData(0, 0, wW, wH).data;
-    const dst = edgeOutData.data;
 
     const audio = field?.audio;
     const audioOn = !!audio?.spectrum;
@@ -1245,6 +1242,53 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const thr  = edgeConfig.threshold * 1020;
     const span = Math.max(1, 1020 - thr);
     const gain = (255 / span) * k;
+
+    // GPU pass (no readback, no per-pixel JS) vs the CPU pass. On a real GPU
+    // the GPU pass is far cheaper on the main thread — which is what Strudel's
+    // scheduler shares — but on software GL its canvas copies cost more than
+    // the JS Sobel. So the first edge frames time both on the main thread and
+    // keep whichever costs less for the rest of the session.
+    if (!edgeGLTried) { edgeGLTried = true; edgeGL = createEdgeGL(); if (!edgeGL) edgeMode = 'cpu'; }
+    const useGL = edgeMode === 'gpu' || (edgeMode === 'probe' && edgeProbeN < EDGE_PROBE_FRAMES);
+    const t0 = performance.now();
+    let edgeSrc = null;
+    if (useGL && edgeGL && !edgeGL.isLost()) {
+      const [gW, gH] = edgeWorkSize();
+      edgeSrc = edgeGL.render(main, gW, gH, thr, gain);
+    }
+    const ranGL = !!edgeSrc;
+    if (!edgeSrc) edgeSrc = renderEdgeCPU(main, thr, gain);
+    if (!edgeSrc) return;
+    compositeEdge(ctx, edgeSrc, W, H, beatPulse);
+    if (edgeMode === 'probe') {
+      const dt = performance.now() - t0;
+      // Skip each side's first frames (texture alloc / shader warm-up).
+      const i = edgeProbeN++;
+      if (ranGL && i >= 3) { edgeProbeGL += dt; edgeProbeGLn++; }
+      else if (!ranGL && i >= EDGE_PROBE_FRAMES + 3) { edgeProbeCPU += dt; edgeProbeCPUn++; }
+      if (edgeProbeN >= EDGE_PROBE_FRAMES * 2) {
+        const g = edgeProbeGLn ? edgeProbeGL / edgeProbeGLn : Infinity;
+        const c = edgeProbeCPUn ? edgeProbeCPU / edgeProbeCPUn : Infinity;
+        edgeMode = g <= c ? 'gpu' : 'cpu';
+        console.info(`[qualia] edge post: ${edgeMode} pass (gpu ${g.toFixed(1)} ms vs cpu ${c.toFixed(1)} ms per frame)`);
+      }
+    }
+  }
+  const EDGE_PROBE_FRAMES = 20;
+  let edgeMode = 'probe', edgeProbeN = 0, edgeProbeGL = 0, edgeProbeGLn = 0, edgeProbeCPU = 0, edgeProbeCPUn = 0;
+
+  function renderEdgeCPU(main, thr, gain) {
+    ensureEdgeBufs();
+    const wW = edgeWW, wH = edgeWH;
+
+    edgeCtx.globalCompositeOperation = 'copy';
+    try {
+      edgeCtx.drawImage(main, 0, 0, wW, wH);
+    } catch {
+      return null;
+    }
+    const src = edgeCtx.getImageData(0, 0, wW, wH).data;
+    const dst = edgeOutData.data;
 
     // Sobel pass — green channel is a cheap luminance proxy and avoids
     // three multiplies per neighbour read.
@@ -1282,7 +1326,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       }
     }
     edgeCtx.putImageData(edgeOutData, 0, 0);
+    return edgeBuf;
+  }
 
+  function compositeEdge(ctx, edgeBuf, W, H, beatPulse) {
     // Black backdrop, then the edge buffer scaled back up to viewport size.
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;

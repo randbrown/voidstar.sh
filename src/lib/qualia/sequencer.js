@@ -144,6 +144,30 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Kit + scheduling state, lazily created on first open() since spinning
   // up Tone.js touches the AudioContext (must follow a user gesture).
   let kit = null;
+
+  // Every hit goes through here. Tone's mono voices (MetalSynth ride/hats,
+  // MembraneSynth kick…) THROW "The time must be greater than or equal to the
+  // last scheduled time" when asked to start before a start they already hold.
+  // That happens when a realign/retempo reschedules the loop while the old
+  // loop's last tick (up to a lookAhead ahead) is already queued, or a pad /
+  // tether hit at Tone.now() lands behind a queued step — and more often when
+  // the main thread lags. Uncaught, it aborted the Transport callback mid-tick
+  // (and in a set, flooded the console while Strudel was already starving).
+  // A hit earlier than that voice's last start is a near-duplicate: drop it.
+  const _lastHitAt = new Map();   // voice id → last scheduled start (audio s)
+  function fireVoice(voice, time, vel) {
+    if (!kit) return false;
+    const last = _lastHitAt.get(voice);
+    if (last !== undefined && time < last) return false;
+    try {
+      kit.trigger(voice, time, vel);
+      _lastHitAt.set(voice, time);
+      return true;
+    } catch (err) {
+      if (!fireVoice._warned) { fireVoice._warned = true; console.warn('[qualia] seq hit dropped:', voice, err?.message || err); }
+      return false;
+    }
+  }
   // Runtime kits loaded from external GitHub/URL packs (id → kit catalog entry).
   // Metadata only — the sample buffers load lazily when the kit is first built.
   const _dynamicKits = new Map();
@@ -375,7 +399,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
         const pad = pads[p];
         if (pad.mute) continue;
         if (pad.hits[cellIdx]) {
-          kit?.trigger(pad.voice, time, Math.max(0, Math.min(1, pad.gain ?? 1)));
+          fireVoice(pad.voice, time, Math.max(0, Math.min(1, pad.gain ?? 1)));
         }
       }
       // Paint the active step on the next animation frame. Tone.Draw
@@ -550,6 +574,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const built = buildKit();
     if (!built) return;   // build failed (logged) — try again on next call
     kit = built;
+    _lastHitAt.clear();   // fresh synths hold no scheduled starts
     wireKit(kit);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
@@ -582,6 +607,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     if (!built) return;
     const old = kit;
     kit = built;
+    _lastHitAt.clear();   // fresh synths hold no scheduled starts
     wireKit(kit);
     applyMuteToKit();
     try { old.dispose(); } catch {}
@@ -1349,7 +1375,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
         try { await Tone.start(); } catch {}
         ensureKit();
         ensureAnalyserAdopted();
-        kit?.trigger(pad.voice, Tone.now(), pad.gain ?? 1);
+        fireVoice(pad.voice, Tone.now(), pad.gain ?? 1);
       });
 
       const nameEl = document.createElement('span');
@@ -1832,7 +1858,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     try { await Tone.start(); } catch { return false; }
     ensureKit();
     ensureAnalyserAdopted();
-    try { kit?.trigger(voice, Tone.now(), Math.max(0, Math.min(1.5, +gain || 1))); } catch { return false; }
+    if (!fireVoice(voice, Tone.now(), Math.max(0, Math.min(1.5, +gain || 1)))) return false;
     return true;
   }
   async function tapHit(voice, opts = {}) {
